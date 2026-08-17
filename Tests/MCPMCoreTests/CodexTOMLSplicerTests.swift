@@ -32,6 +32,8 @@ func splicerIgnoresNonAssignments(line: String) {
     ("[mcp_servers.x] # trailing ] comment", .server(name: "x", subPath: [])),
     ("[projects.\"/Users/me/proj\"]", .other),
     ("[shell_environment_policy.set]", .other),
+    ("[[mcp_servers.arr]]", .other),                // array-of-tables is never ours to rewrite
+    ("[[products]]", .other),
 ])
 private func splicerParsesHeaders(line: String, header: S.Header) {
     #expect(S.parseHeader(line) == header)
@@ -88,6 +90,16 @@ private func splicerRejectsNonHeaders(line: String) {
     #expect(S.str("a\"b\\c") == "\"a\\\"b\\\\c\"")
     #expect(S.str("a\r\nb\t") == "\"a\\r\\nb\\t\"")
     #expect(S.str("a\u{01}b\u{7F}") == "\"a\\u0001b\\u007F\"")
+}
+
+@Test func splicerReadsHeaderTrailers() {
+    #expect(S.headerTrailer("[mcp_servers.x] # note") == " # note")
+    #expect(S.headerTrailer("[mcp_servers.x]  # two spaces  ") == "  # two spaces")
+    #expect(S.headerTrailer("[mcp_servers.\"a]b\"] # note") == " # note")
+    #expect(S.headerTrailer("[mcp_servers.x]") == nil)
+    #expect(S.headerTrailer("[mcp_servers.x]   ") == nil)
+    #expect(S.headerTrailer("[[mcp_servers.arr]] # note") == nil)
+    #expect(S.headerTrailer("command = \"x\"") == nil)
 }
 
 @Test func splicerDetectsLineTerminator() {

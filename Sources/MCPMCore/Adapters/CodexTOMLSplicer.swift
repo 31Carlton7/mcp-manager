@@ -94,32 +94,47 @@ enum CodexTOMLSplicer {
 
     /// Parses a table header line. `nil` when the line is not a table header.
     /// Quote-aware, so `[mcp_servers."a.b]c"]` and `[ mcp_servers.x ]` both work.
+    ///
+    /// An array-of-tables header is `.other`: we never write one, and it must end the preceding
+    /// block rather than be swallowed into it.
     static func parseHeader(_ line: String) -> Header? {
         let t = line.trimmingCharacters(in: .whitespaces)
-        guard t.hasPrefix("["), !t.hasPrefix("[[") else { return nil }
+        guard t.hasPrefix("[") else { return nil }
+        guard !t.hasPrefix("[[") else { return .other }
+        guard let (inner, _) = bracketed(t) else { return nil }
+        guard let segs = segments(inner), segs.first == "mcp_servers" else { return .other }
+        if segs.count == 1 { return .root }
+        return .server(name: segs[1], subPath: Array(segs.dropFirst(2)))
+    }
+
+    /// Whatever follows the closing `]` of a header, e.g. `[mcp_servers.x] # note` → " # note".
+    /// `nil` when there is nothing to carry over.
+    static func headerTrailer(_ line: String) -> String? {
+        let t = line.trimmingCharacters(in: .whitespaces)
+        guard t.hasPrefix("["), !t.hasPrefix("[["), let (_, rest) = bracketed(t) else { return nil }
+        let trailer = String(rest).replacingOccurrences(of: "\\s+$", with: "", options: .regularExpression)
+        return trailer.trimmingCharacters(in: .whitespaces).isEmpty ? nil : trailer
+    }
+
+    /// The key path inside a `[...]` header (quotes kept for `segments`) and the text after the `]`.
+    private static func bracketed(_ t: String) -> (inner: String, rest: Substring)? {
         let body = t.dropFirst()
         var inner = ""
-        var closed = false
         var i = body.startIndex
         while i < body.endIndex {
             let c = body[i]
             if c == "\"" || c == "'" {
                 guard let end = body[body.index(after: i)...].firstIndex(of: c) else { return nil }
-                inner += String(body[i...end])                          // keep quotes for `segments`
+                inner += String(body[i...end])
                 i = body.index(after: end)
             } else if c == "]" {
-                closed = true
-                break
+                return (inner, body[body.index(after: i)...])
             } else {
                 inner.append(c)
                 i = body.index(after: i)
             }
         }
-        guard closed, let segs = segments(inner), segs.first == "mcp_servers" else {
-            return closed ? .other : nil
-        }
-        if segs.count == 1 { return .root }
-        return .server(name: segs[1], subPath: Array(segs.dropFirst(2)))
+        return nil
     }
 
     /// Splits a dotted key path into decoded segments; quoted segments keep their spacing.

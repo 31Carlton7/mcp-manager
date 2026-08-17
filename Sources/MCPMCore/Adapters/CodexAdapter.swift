@@ -89,7 +89,9 @@ public struct CodexAdapter: ClientAdapter {
     /// A block for a server whose shape changed: our keys, then everything in the old block we don't own.
     static func renderBlock(_ s: ExternalServer, over old: [String]) -> [String] {
         let kept = CodexTOMLSplicer.preserved(old)
-        var lines = shapeLines(s) + kept.keys
+        var shape = shapeLines(s)
+        if let trailer = old.first.flatMap(CodexTOMLSplicer.headerTrailer) { shape[0] += trailer }
+        var lines = shape + kept.keys
         if !kept.subTables.isEmpty {
             lines.append("")
             lines += kept.subTables

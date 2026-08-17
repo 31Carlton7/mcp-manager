@@ -247,6 +247,50 @@ private func fixture(_ name: String) throws -> Data {
     #expect(try a.parse(Data(out.utf8)) == desired)
 }
 
+@Test func codexKeepsArrayOfTablesVerbatim() throws {
+    let a = CodexAdapter(configPath: URL(fileURLWithPath: "/dev/null"))
+    let toml = """
+    [mcp_servers.lit]
+    url = "https://lit"
+
+    [[mcp_servers.arr]]
+    command = "a"
+
+    [other]
+    k = 1
+    """
+    let orig = Data(toml.utf8)
+    #expect(try a.parse(orig) == [ExternalServer(name: "lit", kind: .remote, url: "https://lit")])
+
+    // editing another server must not swallow the array-of-tables entry
+    let edited = [ExternalServer(name: "lit", kind: .remote, url: "https://lit2")]
+    let out = String(decoding: try a.render(edited, over: orig), as: UTF8.self)
+    #expect(out.contains("[[mcp_servers.arr]]\ncommand = \"a\""))
+    #expect(out.contains("[other]\nk = 1"))
+    #expect(try a.parse(Data(out.utf8)) == edited)
+
+    // and neither must clearing every server we manage
+    let cleared = String(decoding: try a.render([], over: orig), as: UTF8.self)
+    #expect(cleared.contains("[[mcp_servers.arr]]\ncommand = \"a\""))
+    #expect(cleared.contains("[other]\nk = 1"))
+    #expect(!cleared.contains("[mcp_servers.lit]"))
+    #expect(try a.parse(Data(cleared.utf8)) == [])
+}
+
+@Test func codexEditKeepsHeaderComment() throws {
+    let a = CodexAdapter(configPath: URL(fileURLWithPath: "/dev/null"))
+    let toml = """
+    [mcp_servers.x]  # managed by hand
+    command = "old"
+    args = []
+    """
+    let desired = [ExternalServer(name: "x", kind: .stdio, command: "new", args: [])]
+    let out = String(decoding: try a.render(desired, over: Data(toml.utf8)), as: UTF8.self)
+    #expect(out.contains("[mcp_servers.x]  # managed by hand"))
+    #expect(out.contains("command = \"new\""))
+    #expect(try a.parse(Data(out.utf8)) == desired)
+}
+
 @Test func codexRejectsInvalidTOML() throws {
     let a = CodexAdapter(configPath: URL(fileURLWithPath: "/dev/null"))
     // a config we cannot understand is never rewritten
