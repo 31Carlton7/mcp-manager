@@ -161,4 +161,98 @@ private func fixture(_ name: String) throws -> Data {
     #expect(!cleared.contains("mcp_servers"))
     #expect(cleared.contains("# top comment"))
     #expect(cleared.contains("[shell_environment_policy.set]"))
+    #expect(try a.parse(Data(cleared.utf8)) == [])
+}
+
+@Test func codexPreservesCRLFLineEndings() throws {
+    let a = CodexAdapter(configPath: URL(fileURLWithPath: "/dev/null"))
+    let lf = String(decoding: try fixture("codex-config.toml"), as: UTF8.self)
+    let crlf = Data(lf.replacingOccurrences(of: "\n", with: "\r\n").utf8)
+    var desired = try a.parse(crlf)
+    let i = desired.firstIndex { $0.name == "node_repl" }!
+    desired[i].command = "/usr/local/bin/node_repl"
+    let out = String(decoding: try a.render(desired, over: crlf), as: UTF8.self)
+    #expect(out.contains("\r\n"))
+    #expect(!out.contains("\n\n"))                                      // no bare LF survived
+    #expect(out.contains("# top comment"))
+    #expect(out.contains("[projects.\"/Users/me/proj\"]"))
+    #expect(out.contains("[shell_environment_policy.set]"))
+    #expect(out.contains("startup_timeout_sec = 120"))
+    #expect(Set(try a.parse(Data(out.utf8))) == Set(desired))
+}
+
+@Test func codexEditSurvivesLiteralAndMultiLineStrings() throws {
+    let a = CodexAdapter(configPath: URL(fileURLWithPath: "/dev/null"))
+    let toml = """
+    [mcp_servers.x]
+    args = [ "a", 'single ] quoted', "b" ]
+    command = \"\"\"
+    a multi-line [mcp_servers.fake] command
+    \"\"\"
+    cwd = 'literal ] path'
+    startup_timeout_sec = 5
+
+    [other]
+    keep = 1
+    """
+    #expect(try a.parse(Data(toml.utf8)).map(\.args) == [["a", "single ] quoted", "b"]])
+    let desired = [ExternalServer(name: "x", kind: .stdio, command: "new", args: ["c"])]
+    let out = String(decoding: try a.render(desired, over: Data(toml.utf8)), as: UTF8.self)
+    #expect(out.contains("cwd = 'literal ] path'"))                     // literal string preserved verbatim
+    #expect(out.contains("startup_timeout_sec = 5"))
+    #expect(out.contains("[other]\nkeep = 1"))
+    #expect(!out.contains("single ] quoted"))                           // old args gone, not orphaned
+    #expect(!out.contains("multi-line"))                                // old multi-line command gone whole
+    #expect(try a.parse(Data(out.utf8)) == desired)
+}
+
+@Test func codexEditDropsDottedModeledKeys() throws {
+    let a = CodexAdapter(configPath: URL(fileURLWithPath: "/dev/null"))
+    let toml = """
+    [mcp_servers.x]
+    command = "old"
+    args = []
+    env.A = "1"
+    http_headers.X = "y"
+    enabled = false
+    """
+    #expect(try a.parse(Data(toml.utf8)) == [
+        ExternalServer(name: "x", kind: .stdio, command: "old", args: [], env: ["A": "1"])
+    ])
+    let desired = [ExternalServer(name: "x", kind: .stdio, command: "new", args: [], env: ["B": "2"])]
+    let out = String(decoding: try a.render(desired, over: Data(toml.utf8)), as: UTF8.self)
+    #expect(out.components(separatedBy: "[mcp_servers.x.env]").count - 1 == 1)
+    #expect(!out.contains("env.A"))
+    #expect(!out.contains("http_headers.X"))
+    #expect(out.contains("enabled = false"))
+    #expect(try a.parse(Data(out.utf8)) == desired)
+}
+
+@Test func codexKeepsBlocksItCannotParse() throws {
+    let a = CodexAdapter(configPath: URL(fileURLWithPath: "/dev/null"))
+    let toml = """
+    [mcp_servers.mystery]
+    # neither url nor command: not ours to understand, and not ours to delete
+    enabled = false
+
+    [mcp_servers.x]
+    url = "https://x/mcp"
+    """
+    #expect(try a.parse(Data(toml.utf8)) == [ExternalServer(name: "x", kind: .remote, url: "https://x/mcp")])
+    let desired = [ExternalServer(name: "x", kind: .remote, url: "https://x/mcp2")]
+    let out = String(decoding: try a.render(desired, over: Data(toml.utf8)), as: UTF8.self)
+    #expect(out.contains("[mcp_servers.mystery]"))
+    #expect(out.contains("enabled = false"))
+    #expect(out.contains("# neither url nor command"))
+    #expect(try a.parse(Data(out.utf8)) == desired)
+}
+
+@Test func codexRejectsInvalidTOML() throws {
+    let a = CodexAdapter(configPath: URL(fileURLWithPath: "/dev/null"))
+    // a config we cannot understand is never rewritten
+    #expect(throws: AdapterError.self) { try a.parse(Data("[mcp_servers.x\ncommand =".utf8)) }
+    #expect(throws: AdapterError.self) { try a.render([], over: Data("[mcp_servers.x\ncommand =".utf8)) }
+    // and the render guard rejects any splice that would have produced invalid TOML
+    #expect(throws: AdapterError.self) { try CodexAdapter.assertValidTOML("[mcp_servers.x]\ncommand =") }
+    #expect(throws: Never.self) { try CodexAdapter.assertValidTOML("[mcp_servers.x]\ncommand = \"ok\"") }
 }
