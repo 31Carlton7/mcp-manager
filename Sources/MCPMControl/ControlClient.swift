@@ -113,21 +113,38 @@ public actor ControlClient {
     }
 }
 
+/// Feeds the connection's lines through one stream with a single consumer, so events reach
+/// `events()` in the order the daemon sent them — a stale status must never land after a newer
+/// one. Draining finishes before `disconnected`, so lines already received are still handled.
 private final class InboundHandler: ChannelInboundHandler, @unchecked Sendable {
     typealias InboundIn = ByteBuffer
 
     let client: ControlClient
-    init(client: ControlClient) { self.client = client }
+    private let lines: AsyncStream<Data>
+    private let lineCont: AsyncStream<Data>.Continuation
+    private var consumer: Task<Void, Never>?
+
+    init(client: ControlClient) {
+        self.client = client
+        (lines, lineCont) = AsyncStream<Data>.makeStream()
+    }
+
+    func channelActive(context: ChannelHandlerContext) {
+        let ch = context.channel
+        let lines = self.lines
+        consumer = Task { [client] in
+            for await line in lines { await client.receive(line, from: ch) }
+            await client.disconnected(ch)
+        }
+        context.fireChannelActive()
+    }
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
-        let bytes = Data(unwrapInboundIn(data).readableBytesView)
-        let ch = context.channel
-        Task { await client.receive(bytes, from: ch) }
+        lineCont.yield(Data(unwrapInboundIn(data).readableBytesView))
     }
 
     func channelInactive(context: ChannelHandlerContext) {
-        let ch = context.channel
-        Task { await client.disconnected(ch) }
+        lineCont.finish()
         context.fireChannelInactive()
     }
 

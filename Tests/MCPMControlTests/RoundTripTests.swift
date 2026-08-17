@@ -172,6 +172,34 @@ private func tempSocketPath() -> String {
     try await server.stop()
 }
 
+@Test func eventsArriveInWireOrder() async throws {
+    let sock = tempSocketPath()
+    let server = ControlServer(socketPath: sock) { _ in .ack }
+    try await server.start()
+    let client = ControlClient(socketPath: sock)
+    try await client.connect()
+
+    let events = await client.events()
+    let collected = Task { () -> [String] in
+        var versions: [String] = []
+        for await case .status(let s) in events {
+            versions.append(s.daemonVersion)
+            if versions.count == 20 { break }
+        }
+        return versions
+    }
+    try await Task.sleep(for: .milliseconds(50))
+    for i in 1...20 {
+        await server.broadcast(.status(DaemonStatus(daemonVersion: "\(i)", apiVersion: 1, servers: [], clients: [])))
+    }
+
+    // A stale status landing after a newer one would show the wrong state in the UI.
+    #expect(await collected.value == (1...20).map(String.init))
+
+    await client.close()
+    try await server.stop()
+}
+
 @Test func malformedLineIsRejectedAndTheConnectionKeepsWorking() async throws {
     let sock = tempSocketPath()
     let server = ControlServer(socketPath: sock) { _ in .ack }
