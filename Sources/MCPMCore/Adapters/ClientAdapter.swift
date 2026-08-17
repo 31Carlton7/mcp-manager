@@ -16,5 +16,12 @@ public protocol ClientAdapter: Sendable {
 }
 
 public extension ClientAdapter {
-    func readData() -> Data? { try? Data(contentsOf: configPath) }
+    /// `nil` when the file does not exist; rethrows any other read failure.
+    func readData() throws -> Data? {
+        do {
+            return try Data(contentsOf: configPath)
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+            return nil
+        }
+    }
 }

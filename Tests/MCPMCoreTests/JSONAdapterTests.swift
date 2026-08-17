@@ -26,7 +26,7 @@ private let sample = """
 
 @Test func jsonRenderPreservesUnrelatedKeysAndUnknownServerFields() throws {
     let desired = [
-        ExternalServer(name: "exa", kind: .remote, url: "https://mcp.exa.ai/mcp"),   // kept, headers untouched
+        ExternalServer(name: "exa", kind: .remote, url: "https://mcp.exa.ai/mcp", headers: ["X": "1"]),   // headers are ours now, must be passed explicitly
         ExternalServer(name: "new", kind: .stdio, command: "npx", args: ["-y", "z"], env: ["K": "v"]),
     ]
     let out = try JSONMCPServers.render(desired, over: Data(sample.utf8), writeTypeKey: true)
@@ -35,14 +35,49 @@ private let sample = """
     let ms = obj["mcpServers"] as! [String: Any]
     #expect(Set(ms.keys) == ["exa", "new"])              // mobbin + claudestory removed
     let exa = ms["exa"] as! [String: Any]
-    #expect(exa["headers"] as! [String: String] == ["X": "1"])   // unknown field preserved
-    #expect(exa["name"] as! String == "exa")
+    #expect(exa["headers"] as! [String: String] == ["X": "1"])
+    #expect(exa["name"] as! String == "exa")   // genuinely unknown field preserved
     let new = ms["new"] as! [String: Any]
     #expect(new["type"] as! String == "stdio")
     #expect(new["args"] as! [String] == ["-y", "z"])
     #expect(new["env"] as! [String: String] == ["K": "v"])
     // round trip
-    #expect(Set(try JSONMCPServers.parse(out)) == Set(desired.map { $0.name == "exa" ? ExternalServer(name: "exa", kind: .remote, url: "https://mcp.exa.ai/mcp", headers: ["X": "1"]) : $0 }))
+    #expect(Set(try JSONMCPServers.parse(out)) == Set(desired))
+}
+
+@Test func jsonRenderKindFlipIsCleanForBothTypeKeyModes() throws {
+    let existing = """
+    {"mcpServers":{"a":{"type":"http","url":"u","headers":{"A":"b"}}}}
+    """
+    let desired = [ExternalServer(name: "a", kind: .stdio, command: "x")]
+
+    let withType = try JSONMCPServers.render(desired, over: Data(existing.utf8), writeTypeKey: true)
+    let aWithType = ((try JSONSerialization.jsonObject(with: withType) as! [String: Any])["mcpServers"] as! [String: Any])["a"] as! [String: Any]
+    #expect(aWithType["type"] as! String == "stdio")
+    #expect(aWithType["url"] == nil)
+    #expect(aWithType["headers"] == nil)
+
+    let withoutType = try JSONMCPServers.render(desired, over: Data(existing.utf8), writeTypeKey: false)
+    let aWithoutType = ((try JSONSerialization.jsonObject(with: withoutType) as! [String: Any])["mcpServers"] as! [String: Any])["a"] as! [String: Any]
+    #expect(aWithoutType["type"] == nil)
+    #expect(aWithoutType["url"] == nil)
+    #expect(aWithoutType["headers"] == nil)
+}
+
+@Test func jsonRenderPreservesUnrecognizedEntries() throws {
+    let existing = """
+    {"mcpServers":{"weird":{"foo":1}}}
+    """
+    let out = try JSONMCPServers.render([ExternalServer(name: "b", kind: .stdio, command: "y")], over: Data(existing.utf8), writeTypeKey: true)
+    let ms = (try JSONSerialization.jsonObject(with: out) as! [String: Any])["mcpServers"] as! [String: Any]
+    #expect((ms["weird"] as! [String: Any])["foo"] as! Int == 1)
+    #expect(ms["b"] != nil)
+}
+
+@Test func jsonRenderThrowsOnStdioWithoutCommand() throws {
+    #expect(throws: AdapterError.self) {
+        _ = try JSONMCPServers.render([ExternalServer(name: "a", kind: .stdio)], over: nil, writeTypeKey: true)
+    }
 }
 
 @Test func jsonRenderWithoutTypeKeyOmitsIt() throws {

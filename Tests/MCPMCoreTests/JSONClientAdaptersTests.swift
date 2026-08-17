@@ -47,6 +47,18 @@ private func fixture(_ name: String) throws -> Data {
     #expect(try a.parse(out) == [ExternalServer(name: "linear", kind: .remote, url: "http://localhost:7337/s/linear/mcp")])
 }
 
+@Test func claudeDesktopBridgeRoundTripsHeaders() throws {
+    let a = ClaudeDesktopAdapter(configPath: URL(fileURLWithPath: "/dev/null"))
+    let servers = [ExternalServer(name: "linear", kind: .remote, url: "http://localhost:7337/s/linear/mcp",
+                                   headers: ["Authorization": "Bearer t", "X-Id": "1"])]
+    let out = try a.render(servers, over: nil)
+    let obj = try JSONSerialization.jsonObject(with: out) as! [String: Any]
+    let linear = (obj["mcpServers"] as! [String: Any])["linear"] as! [String: Any]
+    #expect(linear["args"] as! [String] == ["-y", "mcp-remote", "http://localhost:7337/s/linear/mcp",
+                                             "--header", "Authorization: Bearer t", "--header", "X-Id: 1"])
+    #expect(try a.parse(out) == servers)
+}
+
 @Test func allAdaptersCoversEveryClientID() {
     #expect(Set(AllAdapters.make().map(\.id)) == Set(ClientID.allCases))
 }

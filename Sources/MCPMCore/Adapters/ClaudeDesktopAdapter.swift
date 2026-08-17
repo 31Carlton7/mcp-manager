@@ -15,16 +15,35 @@ public struct ClaudeDesktopAdapter: ClientAdapter {
     }
     public func parse(_ data: Data?) throws -> [ExternalServer] {
         try JSONMCPServers.parse(data).map { s in
-            if s.kind == .stdio, s.command == "npx", s.args.count == 3, s.args[0] == "-y", s.args[1] == "mcp-remote" {
-                return ExternalServer(name: s.name, kind: .remote, url: s.args[2])
+            guard s.kind == .stdio, s.command == "npx", s.args.count >= 3,
+                  s.args[0] == "-y", s.args[1] == "mcp-remote" else { return s }
+            let url = s.args[2]
+            var headers: [String: String] = [:]
+            var i = 3
+            while i < s.args.count {
+                if s.args[i] == "--header", i + 1 < s.args.count, let range = s.args[i + 1].range(of: ": ") {
+                    let pair = s.args[i + 1]
+                    headers[String(pair[pair.startIndex..<range.lowerBound])] = String(pair[range.upperBound...])
+                    i += 2
+                } else {
+                    i += 1
+                }
             }
-            return s
+            return ExternalServer(name: s.name, kind: .remote, url: url, headers: headers)
         }
     }
     public func render(_ servers: [ExternalServer], over data: Data?) throws -> Data {
-        let bridged = servers.map { s -> ExternalServer in
+        let bridged = try servers.map { s -> ExternalServer in
             guard s.kind == .remote else { return s }
-            return ExternalServer(name: s.name, kind: .stdio, command: "npx", args: ["-y", "mcp-remote", s.url ?? ""])
+            guard let url = s.url, !url.isEmpty else {
+                throw AdapterError.parse("remote server '\(s.name)' has no url")
+            }
+            var args = ["-y", "mcp-remote", url]
+            for key in s.headers.keys.sorted() {
+                args.append("--header")
+                args.append("\(key): \(s.headers[key]!)")
+            }
+            return ExternalServer(name: s.name, kind: .stdio, command: "npx", args: args)
         }
         return try JSONMCPServers.render(bridged, over: data, writeTypeKey: false)
     }

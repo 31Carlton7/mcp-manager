@@ -29,7 +29,8 @@ public enum JSONMCPServers {
     }
 
     /// Merges `servers` into the existing section: keeps unknown fields of servers we keep,
-    /// removes servers not in `servers`, adds new ones. Everything outside `key` is untouched.
+    /// removes servers not in `servers`, adds new ones, and never touches entries we don't
+    /// recognize as a server shape. Everything outside `key` is untouched.
     public static func render(_ servers: [ExternalServer], over data: Data?, key: String = "mcpServers",
                               writeTypeKey: Bool) throws -> Data {
         var root: [String: Any] = [:]
@@ -41,24 +42,39 @@ public enum JSONMCPServers {
         }
         let existing = root[key] as? [String: Any] ?? [:]
         var section: [String: Any] = [:]
+        // Never delete entries whose shape we don't understand (not a dict, or neither url nor command).
+        for (name, raw) in existing {
+            guard let d = raw as? [String: Any] else { section[name] = raw; continue }
+            if external(name: name, dict: d) == nil { section[name] = d }
+        }
         for s in servers {
             var d = existing[s.name] as? [String: Any] ?? [:]
-            // remove shape keys of the *other* kind so a stdio→remote flip is clean
-            for k in ["command", "args", "env", "url", "type"] where !(k == "type" && !writeTypeKey) { d.removeValue(forKey: k) }
+            // always strip both shapes' keys so a stdio<->remote flip is clean; `type` is re-added below if requested
+            for k in ["command", "args", "env", "url", "headers", "type"] { d.removeValue(forKey: k) }
             switch s.kind {
             case .stdio:
-                d["command"] = s.command ?? ""
+                guard let command = s.command, !command.isEmpty else {
+                    throw AdapterError.parse("stdio server '\(s.name)' has no command")
+                }
+                d["command"] = command
                 d["args"] = s.args
                 d["env"] = s.env
                 if writeTypeKey { d["type"] = "stdio" }
             case .remote:
-                d["url"] = s.url ?? ""
+                guard let url = s.url, !url.isEmpty else {
+                    throw AdapterError.parse("remote server '\(s.name)' has no url")
+                }
+                d["url"] = url
                 if writeTypeKey { d["type"] = "http" }
                 if !s.headers.isEmpty { d["headers"] = s.headers }
             }
             section[s.name] = d
         }
         root[key] = section
-        return try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+        do {
+            return try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+        } catch {
+            throw AdapterError.parse(String(describing: error))
+        }
     }
 }
