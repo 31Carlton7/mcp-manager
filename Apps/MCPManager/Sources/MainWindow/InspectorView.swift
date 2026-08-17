@@ -244,7 +244,8 @@ struct InspectorView: View {
     }
 
     private func commitArgs(_ status: ServerStatus) {
-        let args = argsText.split(whereSeparator: \.isWhitespace).map(String.init)
+        // Shell-split rather than whitespace-split, so a quoted arg ("chrome canary") stays one arg.
+        let args = SmartPasteParser.shellSplit(argsText)
         guard args != status.server.args else { return }
         daemon.update(UpdateServerParams(id: status.server.id, args: args))
     }

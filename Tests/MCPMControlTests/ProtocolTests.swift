@@ -62,3 +62,15 @@ import MCPMCore
     #expect(round.clients[0].watched)
     #expect(round.lastError == "sync failed")
 }
+
+@Test func addServerParamsDecodesWithoutHeaders() throws {
+    let json = #"{"id":9,"method":"servers.add","params":{"name":"notion","kind":"remote","args":[],"env":{},"url":"https://mcp.notion.com/mcp","auth":"none","clients":{"cursor":true}}}"#
+    let req = try JSONDecoder.mcpm.decode(ControlRequest.self, from: Data(json.utf8))
+    guard case .addServer(let p) = req.command else { Issue.record("wrong command"); return }
+    #expect(p.headers == [:])
+    #expect(p.url == "https://mcp.notion.com/mcp")
+
+    let withHeaders = AddServerParams(name: "n", kind: .remote, url: "https://x.dev/mcp", headers: ["X-Key": "v"])
+    let round = try JSONDecoder.mcpm.decode(AddServerParams.self, from: JSONEncoder.mcpm.encode(withHeaders))
+    #expect(round == withHeaders)
+}

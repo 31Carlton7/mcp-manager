@@ -42,12 +42,29 @@ public struct AddServerParams: Codable, Equatable, Sendable {
     public var args: [String]
     public var env: [String: String]
     public var url: String?
+    public var headers: [String: String]
     public var auth: AuthKind
     public var clients: [ClientID: Bool]
     public init(name: String, kind: ServerKind, command: String? = nil, args: [String] = [], env: [String: String] = [:],
-                url: String? = nil, auth: AuthKind = .none, clients: [ClientID: Bool] = [:]) {
+                url: String? = nil, headers: [String: String] = [:], auth: AuthKind = .none,
+                clients: [ClientID: Bool] = [:]) {
         self.name = name; self.kind = kind; self.command = command; self.args = args; self.env = env
-        self.url = url; self.auth = auth; self.clients = clients
+        self.url = url; self.headers = headers; self.auth = auth; self.clients = clients
+    }
+
+    /// `headers` arrived after the first release, so it decodes as optional: an older app talking to
+    /// a newer daemon still sends requests without the key.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decode(String.self, forKey: .name)
+        kind = try c.decode(ServerKind.self, forKey: .kind)
+        command = try c.decodeIfPresent(String.self, forKey: .command)
+        args = try c.decode([String].self, forKey: .args)
+        env = try c.decode([String: String].self, forKey: .env)
+        url = try c.decodeIfPresent(String.self, forKey: .url)
+        headers = try c.decodeIfPresent([String: String].self, forKey: .headers) ?? [:]
+        auth = try c.decode(AuthKind.self, forKey: .auth)
+        clients = try c.decode([ClientID: Bool].self, forKey: .clients)
     }
 }
 

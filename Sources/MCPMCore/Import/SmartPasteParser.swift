@@ -92,7 +92,7 @@ public enum SmartPasteParser {
     }
 
     /// Minimal POSIX-ish splitter: whitespace separated, honours "double" and 'single' quotes and backslash escapes.
-    static func shellSplit(_ s: String) -> [String] {
+    public static func shellSplit(_ s: String) -> [String] {
         var out: [String] = [], cur = "", inS = false, inD = false, esc = false, has = false
         for ch in s {
             if esc { cur.append(ch); esc = false; continue }
