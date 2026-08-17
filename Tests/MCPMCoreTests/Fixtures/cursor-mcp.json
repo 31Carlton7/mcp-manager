@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "nia": { "command": "pipx", "args": ["run", "--no-cache", "nia-mcp-server"],
+             "env": { "NIA_API_KEY": "nk_REDACTED", "NIA_API_URL": "https://apigcp.trynia.ai/" } },
+    "Figma Desktop": { "url": "http://127.0.0.1:3845/mcp", "headers": {} },
+    "context7": { "url": "https://mcp.context7.com/mcp", "headers": {} }
+  }
+}

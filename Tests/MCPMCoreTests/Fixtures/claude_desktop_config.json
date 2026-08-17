@@ -1,0 +1,8 @@
+{
+  "coworkUserFilesPath": "/Users/me/Documents/Claude",
+  "preferences": { "menuBarEnabled": true },
+  "mcpServers": {
+    "filesystem": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"] },
+    "notion": { "command": "npx", "args": ["-y", "mcp-remote", "http://localhost:7337/s/notion/mcp"] }
+  }
+}

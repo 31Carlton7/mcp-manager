@@ -1,0 +1,8 @@
+{
+  "numStartups": 42,
+  "projects": { "/Users/me/proj": { "mcpServers": { "proj-only": { "type": "stdio", "command": "x" } } } },
+  "mcpServers": {
+    "claudestory": { "type": "stdio", "command": "claudestory", "args": ["--mcp"], "env": {} },
+    "mobbin": { "type": "http", "url": "https://api.mobbin.com/mcp" }
+  }
+}
