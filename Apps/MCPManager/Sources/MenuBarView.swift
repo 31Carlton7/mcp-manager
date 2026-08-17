@@ -125,13 +125,14 @@ struct MenuBarView: View {
 
     private var heroes: some View {
         let attention = daemon.attentionCount
-        return HStack(alignment: .top, spacing: 22) {
+        return HStack(alignment: .top, spacing: 28) {
             HeroNumber(title: "Active", value: daemon.activeCount(filter: filter))
             HeroNumber(title: "Clients", value: daemon.installedClients.count)
             HeroNumber(title: "Needs attention", value: attention, tint: attention > 0 ? .yellow : .secondary)
             Spacer(minLength: 0)
         }
         .opacity(daemon.isConnected ? 1 : 0.4)
+        .animation(.snappy(duration: 0.2), value: daemon.isConnected)
     }
 
     // MARK: list
@@ -143,7 +144,7 @@ struct MenuBarView: View {
             VStack(spacing: 2) {
                 switch tab {
                 case .servers:
-                    let servers = daemon.servers(filter: filter)
+                    let servers = daemon.servers
                     if servers.isEmpty {
                         empty("No servers yet")
                     } else {
@@ -161,6 +162,7 @@ struct MenuBarView: View {
         }
         .frame(maxHeight: 320)
         .fixedSize(horizontal: false, vertical: true)
+        .animation(.snappy(duration: 0.2), value: daemon.isConnected)
     }
 
     private func empty(_ text: String) -> some View {
@@ -193,6 +195,9 @@ struct MenuBarView: View {
                 .labelsHidden()
         }
         .padding(.vertical, 3)
+        // The "Sign in" badge appears and disappears with the daemon's status pushes, so it fades
+        // rather than popping into the middle of the row.
+        .animation(.snappy(duration: 0.2), value: st.state)
     }
 
     /// One switch, two meanings: with no filter it is the master switch for every installed

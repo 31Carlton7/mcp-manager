@@ -14,6 +14,9 @@ struct MainWindowView: View {
     @State private var query = ""
     @State private var showAdd = false
     @State private var showRemove = false
+    /// ⌫ only means "remove" while the grid itself has focus — inside the search field it still
+    /// deletes a character.
+    @FocusState private var gridFocused: Bool
 
     private var selected: ServerStatus? {
         guard let selection else { return nil }
@@ -24,7 +27,7 @@ struct MainWindowView: View {
     /// this is cheap enough to do while the view builds.
     private var filtered: [ServerStatus] {
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return daemon.servers(filter: clientFilter).filter { st in
+        return daemon.servers.filter { st in
             if !needle.isEmpty, !st.server.name.lowercased().contains(needle) { return false }
             if let kindFilter, st.server.kind != kindFilter { return false }
             if let clientFilter, !daemon.isEnabled(st.server, for: clientFilter) { return false }
@@ -33,10 +36,12 @@ struct MainWindowView: View {
     }
 
     var body: some View {
+        // Filtering once per body: the header's count and the grid are the same list.
+        let servers = filtered
         VStack(spacing: 0) {
-            header
+            header(count: servers.count)
             Hairline()
-            body(of: daemon.status)
+            content(for: servers)
             banners
         }
         .inspector(isPresented: .constant(true)) {
@@ -53,18 +58,22 @@ struct MainWindowView: View {
         } message: { st in
             Text("Remove \(st.server.name) from all clients?")
         }
-        .onDeleteCommand { if selected != nil { showRemove = true } }
+        // A server can leave under us — removed here, or deleted from every client's config on
+        // disk — and a selection pointing at nothing would leave the inspector permanently empty.
+        .onChange(of: daemon.status?.servers.map(\.id) ?? []) { _, ids in
+            if let selection, !ids.contains(selection) { self.selection = nil }
+        }
         .onAppear { daemon.start() }
     }
 
     // MARK: header
 
-    private var header: some View {
+    private func header(count: Int) -> some View {
         GlassEffectContainer(spacing: Space.s) {
             HStack(spacing: Space.s) {
                 clientMenu
                 kindMenu
-                Text("\(filtered.count) \(filtered.count == 1 ? "server" : "servers")")
+                Text("\(count) \(count == 1 ? "server" : "servers")")
                     .font(Typography.caption)
                     .foregroundStyle(.secondary)
                 Spacer(minLength: Space.m)
@@ -142,11 +151,12 @@ struct MainWindowView: View {
 
     /// The last status the daemon sent is still the best guess at the truth, so it stays on screen
     /// while disconnected — dimmed and inert, since editing it can't work.
-    @ViewBuilder private func body(of status: DaemonStatus?) -> some View {
-        if status != nil {
-            grid
+    @ViewBuilder private func content(for servers: [ServerStatus]) -> some View {
+        if daemon.status != nil {
+            grid(servers)
                 .disabled(!daemon.isConnected)
                 .opacity(daemon.isConnected ? 1 : 0.5)
+                .animation(.snappy(duration: 0.2), value: daemon.isConnected)
         } else if let why = daemon.disconnectReason {
             spacerView(ContentUnavailableView("Background service unreachable", systemImage: "powerplug",
                                               description: Text(why)))
@@ -159,8 +169,8 @@ struct MainWindowView: View {
         content.frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    @ViewBuilder private var grid: some View {
-        if filtered.isEmpty {
+    @ViewBuilder private func grid(_ servers: [ServerStatus]) -> some View {
+        if servers.isEmpty {
             spacerView(ContentUnavailableView(
                 daemon.status?.servers.isEmpty == true ? "No servers yet" : "No matching servers",
                 systemImage: "square.grid.2x2",
@@ -169,13 +179,23 @@ struct MainWindowView: View {
         } else {
             ScrollView {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 10)], spacing: 10) {
-                    ForEach(filtered) { st in
+                    ForEach(servers) { st in
                         ServerCard(status: st, clients: daemon.installedClients,
-                                   selected: st.id == selection) { selection = st.id }
+                                   selected: st.id == selection) {
+                            selection = st.id
+                            gridFocused = true
+                        }
                     }
                 }
                 .padding(Space.l)
             }
+            // `onDeleteCommand` is only delivered to the focused responder, so the grid has to be
+            // able to take focus — selecting a card gives it focus, and the accent border already
+            // says which card ⌫ would remove, so the system focus ring would only be noise.
+            .focusable()
+            .focusEffectDisabled()
+            .focused($gridFocused)
+            .onDeleteCommand { if selected != nil { showRemove = true } }
         }
     }
 

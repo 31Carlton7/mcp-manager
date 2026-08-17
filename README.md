@@ -14,6 +14,16 @@ Plan 1 — the config hub — is done: library, adapters for the four clients, f
 the control protocol, the daemon and the app. Next: the local OAuth gateway (remote servers with
 `auth` set are rejected until it exists) and packaging/launchd installation.
 
+## UI
+
+Clicking the menu bar icon opens a popover: three hero numbers across the top — how many servers
+are active, how many clients are installed, how many things need a human — over a list of servers
+with a switch each, and a second tab for the clients behind them. The main window is a grid of
+server cards with an inspector pinned to the right; a card shows the server, its transport and a
+chip per client, and clicking a chip turns that server on or off in that client without opening
+anything. Add takes one paste — a URL, an `npx …` line, or the whole JSON block from a README — and
+fills the rest of the form in itself, with the fields almost nobody touches behind Advanced.
+
 ## Build and run
 
 Daemon:

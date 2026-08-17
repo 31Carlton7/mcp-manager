@@ -8,6 +8,9 @@ import MCPMCore
 struct ServerIcon: View {
     let server: Server
     var size: CGFloat = 26
+    /// Off for previews of a server that is still being typed: the host changes with every
+    /// keystroke, and each new host is a fetch for a name that may never exist.
+    var fetchesFavicon = true
 
     @State private var favicon: NSImage?
 
@@ -42,7 +45,9 @@ struct ServerIcon: View {
                 }
                 .animation(.easeOut(duration: 0.18), value: favicon != nil)
                 .task(id: host) {
-                    if let data = await FaviconCache.shared.iconData(for: host) { favicon = NSImage(data: data) }
+                    guard fetchesFavicon,
+                          let data = await FaviconCache.shared.iconData(for: host) else { return }
+                    favicon = NSImage(data: data)
                 }
         }
     }

@@ -24,7 +24,19 @@ struct ServerCard: View {
     let select: () -> Void
 
     @Environment(DaemonClient.self) private var daemon
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hovering = false
+    /// True for as long as the mouse is down on the card. `@GestureState` so it can never stick on
+    /// if the gesture is cancelled out from under us.
+    @GestureState private var pressing = false
+
+    /// Hover lifts the card a hair and a press pushes it back — a pointer-sized amount, not a
+    /// bounce. Reduce Motion keeps the border feedback and drops the movement.
+    private var scale: CGFloat {
+        guard !reduceMotion else { return 1 }
+        if pressing { return 0.99 }
+        return hovering ? 1.01 : 1
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.s) {
@@ -44,19 +56,25 @@ struct ServerCard: View {
         }
         .padding(Space.m)
         .frame(height: 96, alignment: .topLeading)
-        .glassCard(selected: selected)
-        .overlay {
-            // Selection is the accent border inside `glassCard`; hover only lifts the edge a little,
-            // so the two can be on at once without fighting.
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(.primary.opacity(hovering && !selected ? 0.18 : 0), lineWidth: 1)
-        }
-        .animation(.snappy(duration: 0.15), value: hovering)
+        .cardSurface(selected: selected, hovering: hovering)
+        .scaleEffect(scale)
+        .animation(.snappy(duration: 0.18), value: scale)
         .contentShape(.rect(cornerRadius: 16, style: .continuous))
-        .onTapGesture(perform: select)
+        // A zero-distance drag rather than `onTapGesture`, because it also reports the press. The
+        // chips are child buttons and so still win the click that lands on them.
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .updating($pressing) { _, state, _ in state = true }
+                .onEnded { value in
+                    let slip = max(abs(value.translation.width), abs(value.translation.height))
+                    if slip < 8 { select() }
+                }
+        )
         .onHover { hovering = $0 }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(status.server.name)
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityAction { select() }
     }
 
     @ViewBuilder private var subline: some View {
@@ -94,8 +112,9 @@ struct ServerCard: View {
                 .padding(.horizontal, 6)
                 .padding(.vertical, 3)
                 .background(on ? Color.green.opacity(0.18) : Color.primary.opacity(0.06), in: .capsule)
+                .contentShape(.capsule)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.pressable)
         .animation(.snappy(duration: 0.15), value: on)
         .help(on ? "Enabled in \(client.displayName) — click to turn off"
                  : "Disabled in \(client.displayName) — click to turn on")

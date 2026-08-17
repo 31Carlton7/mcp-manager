@@ -19,6 +19,9 @@ struct AddServerSheet: View {
     @State private var argsText = ""
     @State private var envRows: [KeyValueRow] = []
     @State private var headerRows: [KeyValueRow] = []
+    /// The paste well's current height: one line to start, growing with the content up to a point
+    /// past which it scrolls instead.
+    @State private var pasteHeight: CGFloat = Self.pasteMinHeight
 
     /// Identity that survives editing: keying rows by their key would renumber the list mid-word.
     private struct KeyValueRow: Identifiable {
@@ -52,8 +55,13 @@ struct AddServerSheet: View {
                 LabeledContent("Name") {
                     // Writing through the binding is the only signal that the *user* renamed the
                     // server; `onChange` would also fire when a fresh parse fills the field in.
-                    TextField("Server name", text: Binding(get: { name },
-                                                           set: { name = $0; nameEdited = true }))
+                    // Emptying the field is a request to go back to the parsed name.
+                    TextField("Server name", text: Binding(
+                        get: { name },
+                        set: {
+                            name = $0
+                            nameEdited = !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        }))
                         .textFieldStyle(.roundedBorder)
                         .labelsHidden()
                 }
@@ -77,19 +85,32 @@ struct AddServerSheet: View {
         .padding(Space.l)
         .frame(width: 460)
         .onAppear { clients = Set(daemon.installedClients.map(\.id)) }
-        .onChange(of: paste) { reparse() }
+        // Parsing a JSON block on every keystroke is wasted work, and a half-typed URL briefly
+        // parses as something else — so the form settles a beat after typing stops.
+        .task(id: paste) {
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
+            reparse()
+        }
         .animation(.snappy(duration: 0.2), value: parsed.servers.count)
     }
 
     // MARK: paste
 
+    private static let pasteMinHeight: CGFloat = 52
+    private static let pasteMaxHeight: CGFloat = 140
+
+    private var pasteFont: Font { .system(size: 12, design: .monospaced) }
+
     private var pasteField: some View {
         TextEditor(text: $paste)
-            .font(.system(size: 12, design: .monospaced))
+            .font(pasteFont)
             .scrollContentBackground(.hidden)
-            .frame(minHeight: 52, maxHeight: 140)
+            .frame(height: pasteHeight)
+            .background(alignment: .topLeading) { pasteMeasure }
+            .animation(.snappy(duration: 0.18), value: pasteHeight)
             .padding(Space.s)
-            .glassCard(cornerRadius: 10)
+            .cardSurface(cornerRadius: 10)
             .overlay(alignment: .topLeading) {
                 if paste.isEmpty {
                     // TextEditor insets its own text by ~5 pt, so the placeholder matches that
@@ -103,6 +124,22 @@ struct AddServerSheet: View {
                 }
             }
             .accessibilityLabel("Server to add")
+    }
+
+    /// The same string in the same font behind the editor, laid out at the editor's width, is the
+    /// cheapest honest answer to "how tall does this need to be" — `TextEditor` won't say. It is
+    /// hidden, so it only ever contributes its height.
+    private var pasteMeasure: some View {
+        Text(paste.isEmpty ? " " : paste)
+            .font(pasteFont)
+            // TextEditor insets its own text by ~5 pt a side; matching that keeps the wrapping the
+            // same in both, which is the whole point of the measurement.
+            .padding(.horizontal, 5)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .hidden()
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                pasteHeight = min(max(Self.pasteMinHeight, height + 8), Self.pasteMaxHeight)
+            }
     }
 
     /// The parser's own words about what it found. A blank line still takes up room, so the fields
@@ -122,7 +159,7 @@ struct AddServerSheet: View {
     private func preview(_ server: ExternalServer) -> some View {
         let shown = previewServer(server)
         return HStack(spacing: Space.s) {
-            ServerIcon(server: shown, size: 26)
+            ServerIcon(server: shown, size: 26, fetchesFavicon: false)
             VStack(alignment: .leading, spacing: 1) {
                 Text(shown.name)
                     .font(.system(size: 13, weight: .semibold))
@@ -174,8 +211,9 @@ struct AddServerSheet: View {
                 .padding(.horizontal, 6)
                 .padding(.vertical, 3)
                 .background(on ? Color.green.opacity(0.18) : Color.primary.opacity(0.06), in: .capsule)
+                .contentShape(.capsule)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.pressable)
         .animation(.snappy(duration: 0.15), value: on)
         .accessibilityLabel("\(client.displayName), \(on ? "on" : "off")")
     }
@@ -218,7 +256,7 @@ struct AddServerSheet: View {
                 Button { rows.wrappedValue.append(KeyValueRow(key: "", value: "")) } label: {
                     Image(systemName: "plus")
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.pressable)
                 .foregroundStyle(.secondary)
                 .accessibilityLabel("Add \(title) entry")
             }
@@ -231,9 +269,9 @@ struct AddServerSheet: View {
                     } label: {
                         Image(systemName: "minus")
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.pressable)
                     .foregroundStyle(.secondary)
-                    .accessibilityLabel("Remove \(row.key.isEmpty ? "empty" : row.key)")
+                    .accessibilityLabel("Remove \(row.key.isEmpty ? "empty" : row.key) entry")
                 }
                 .textFieldStyle(.roundedBorder)
                 .font(.system(size: 11, design: .monospaced))
@@ -261,6 +299,7 @@ struct AddServerSheet: View {
         HStack {
             Spacer(minLength: 0)
             Button("Cancel", role: .cancel) { dismiss() }
+                .keyboardShortcut(.cancelAction)
             Button("Add") { add() }
                 .keyboardShortcut(.defaultAction)
                 .disabled(!canAdd)

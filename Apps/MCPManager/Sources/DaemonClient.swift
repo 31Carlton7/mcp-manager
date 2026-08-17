@@ -44,10 +44,10 @@ final class DaemonClient {
     /// The only clients the UI ever shows: the ones actually on this Mac.
     var installedClients: [ClientStatus] { status?.clients.filter(\.installed) ?? [] }
 
-    /// Every server, ordered for display. The filter names the client a row's switch writes to —
-    /// it does not hide servers, because a server that is off everywhere is exactly what the user
-    /// opened the popover to turn on.
-    func servers(filter: ClientID?) -> [ServerStatus] {
+    /// Every server, ordered for display. Deliberately unfiltered: a client filter names the client
+    /// a row's switch writes to, and a server that is off everywhere is exactly what the user
+    /// opened the popover to turn on. The main window filters this list itself.
+    var servers: [ServerStatus] {
         (status?.servers ?? []).sorted { $0.server.name.localizedStandardCompare($1.server.name) == .orderedAscending }
     }
 

@@ -143,7 +143,7 @@ struct InspectorView: View {
                 Text("Env").font(Typography.caption).foregroundStyle(.secondary)
                 Spacer(minLength: 0)
                 Button { envRows.append(EnvRow(key: "", value: "")) } label: { Image(systemName: "plus") }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.pressable)
                     .foregroundStyle(.secondary)
                     .accessibilityLabel("Add environment variable")
             }
@@ -159,9 +159,9 @@ struct InspectorView: View {
                     } label: {
                         Image(systemName: "minus")
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.pressable)
                     .foregroundStyle(.secondary)
-                    .accessibilityLabel("Remove \(row.key)")
+                    .accessibilityLabel("Remove \(row.key.isEmpty ? "empty" : row.key) environment variable")
                 }
                 .textFieldStyle(.roundedBorder)
                 .font(.system(size: 11, design: .monospaced))
