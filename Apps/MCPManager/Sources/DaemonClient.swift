@@ -173,6 +173,8 @@ final class DaemonClient {
 
     func remove(_ id: String) { run(.removeServer(.init(id: id))) }
     func add(_ p: AddServerParams) { run(.addServer(p)) }
+    /// Only the fields set on `p` change; everything left nil keeps its stored value.
+    func update(_ p: UpdateServerParams) { run(.updateServer(p)) }
     func reimport(_ c: ClientID) { run(.reimport(.init(client: c))) }
 
     private func run(_ cmd: ControlCommand, keys: [(server: String, client: ClientID)] = []) {

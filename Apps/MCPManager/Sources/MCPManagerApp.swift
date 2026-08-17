@@ -17,8 +17,11 @@ struct MCPManagerApp: App {
         // Not presented at launch: with MenuBarExtra first and LSUIElement set, macOS leaves this
         // scene closed until `openWindow(id: "main")` asks for it (verified — see Task 15 notes).
         Window("MCP Manager", id: "main") {
-            ServersView().environment(daemon)
-                .frame(minWidth: 640, minHeight: 400)
+            MainWindowView().environment(daemon)
+                .frame(minWidth: 820, minHeight: 520)
+                .containerBackground(.thinMaterial, for: .window)
         }
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 900, height: 560)
     }
 }
