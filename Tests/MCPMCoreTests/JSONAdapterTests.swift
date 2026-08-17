@@ -1,0 +1,61 @@
+import Testing
+import Foundation
+@testable import MCPMCore
+
+private let sample = """
+{"other":{"keep":1},"mcpServers":{
+  "claudestory":{"type":"stdio","command":"claudestory","args":["--mcp"],"env":{}},
+  "mobbin":{"type":"http","url":"https://api.mobbin.com/mcp"},
+  "exa":{"name":"exa","type":"http","url":"https://mcp.exa.ai/mcp","headers":{"X":"1"}}
+}}
+"""
+
+@Test func jsonParseReadsStdioAndRemote() throws {
+    let servers = try JSONMCPServers.parse(Data(sample.utf8)).sorted { $0.name < $1.name }
+    #expect(servers.map(\.name) == ["claudestory", "exa", "mobbin"])
+    #expect(servers[0] == ExternalServer(name: "claudestory", kind: .stdio, command: "claudestory", args: ["--mcp"]))
+    #expect(servers[1].url == "https://mcp.exa.ai/mcp")
+    #expect(servers[1].headers == ["X": "1"])
+    #expect(servers[2].kind == .remote)
+}
+
+@Test func jsonParseOfMissingSectionIsEmpty() throws {
+    #expect(try JSONMCPServers.parse(Data("{}".utf8)).isEmpty)
+    #expect(try JSONMCPServers.parse(nil).isEmpty)
+}
+
+@Test func jsonRenderPreservesUnrelatedKeysAndUnknownServerFields() throws {
+    let desired = [
+        ExternalServer(name: "exa", kind: .remote, url: "https://mcp.exa.ai/mcp"),   // kept, headers untouched
+        ExternalServer(name: "new", kind: .stdio, command: "npx", args: ["-y", "z"], env: ["K": "v"]),
+    ]
+    let out = try JSONMCPServers.render(desired, over: Data(sample.utf8), writeTypeKey: true)
+    let obj = try JSONSerialization.jsonObject(with: out) as! [String: Any]
+    #expect((obj["other"] as! [String: Any])["keep"] as! Int == 1)
+    let ms = obj["mcpServers"] as! [String: Any]
+    #expect(Set(ms.keys) == ["exa", "new"])              // mobbin + claudestory removed
+    let exa = ms["exa"] as! [String: Any]
+    #expect(exa["headers"] as! [String: String] == ["X": "1"])   // unknown field preserved
+    #expect(exa["name"] as! String == "exa")
+    let new = ms["new"] as! [String: Any]
+    #expect(new["type"] as! String == "stdio")
+    #expect(new["args"] as! [String] == ["-y", "z"])
+    #expect(new["env"] as! [String: String] == ["K": "v"])
+    // round trip
+    #expect(Set(try JSONMCPServers.parse(out)) == Set(desired.map { $0.name == "exa" ? ExternalServer(name: "exa", kind: .remote, url: "https://mcp.exa.ai/mcp", headers: ["X": "1"]) : $0 }))
+}
+
+@Test func jsonRenderWithoutTypeKeyOmitsIt() throws {
+    let out = try JSONMCPServers.render([ExternalServer(name: "a", kind: .stdio, command: "x")], over: nil, writeTypeKey: false)
+    let obj = try JSONSerialization.jsonObject(with: out) as! [String: Any]
+    let a = (obj["mcpServers"] as! [String: Any])["a"] as! [String: Any]
+    #expect(a["type"] == nil)
+    #expect(a["command"] as! String == "x")
+}
+
+@Test func jsonRenderIsStableWhenNothingChanges() throws {
+    let parsed = try JSONMCPServers.parse(Data(sample.utf8))
+    let once = try JSONMCPServers.render(parsed, over: Data(sample.utf8), writeTypeKey: true)
+    let twice = try JSONMCPServers.render(parsed, over: once, writeTypeKey: true)
+    #expect(once == twice)
+}
