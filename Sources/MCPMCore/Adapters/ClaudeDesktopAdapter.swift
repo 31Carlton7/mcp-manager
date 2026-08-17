@@ -5,7 +5,7 @@ public struct ClaudeDesktopAdapter: ClientAdapter {
     public let id = ClientID.claudeDesktop
     public let displayName = "Claude Desktop"
     public let configPath: URL
-    public init(configPath: URL = FileManager.default.homeDirectoryForCurrentUser
+    public init(configPath: URL = HomeDirectory.url
         .appendingPathComponent("Library/Application Support/Claude/claude_desktop_config.json")) {
         self.configPath = configPath
     }

@@ -4,7 +4,7 @@ public struct CursorAdapter: ClientAdapter {
     public let id = ClientID.cursor
     public let displayName = "Cursor"
     public let configPath: URL
-    public init(configPath: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".cursor/mcp.json")) {
+    public init(configPath: URL = HomeDirectory.url.appendingPathComponent(".cursor/mcp.json")) {
         self.configPath = configPath
     }
     public func isInstalled() -> Bool {

@@ -9,7 +9,7 @@ public struct CodexAdapter: ClientAdapter {
     public let displayName = "Codex"
     public let configPath: URL
 
-    public init(configPath: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex/config.toml")) {
+    public init(configPath: URL = HomeDirectory.url.appendingPathComponent(".codex/config.toml")) {
         self.configPath = configPath
     }
 
