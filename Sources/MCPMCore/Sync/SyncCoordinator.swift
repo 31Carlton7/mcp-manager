@@ -1,9 +1,18 @@
 import Foundation
 
+public enum SyncCoordinatorError: Error, Equatable {
+    /// A mutation was attempted before the library was ever read successfully. Saving now would
+    /// overwrite a store we failed to load — usually a corrupt one the user still wants back.
+    case notLoaded
+}
+
 public struct ClientHealth: Sendable, Equatable {
     public var healthy: Bool
     public var error: String?
     public var lastSync: Date?
+    /// False when nothing about this client's config file can be observed. Always true while the
+    /// coordinator isn't watching.
+    public var watched: Bool = true
 }
 
 public actor SyncCoordinator {
@@ -15,6 +24,10 @@ public actor SyncCoordinator {
     private var suppressedUntil: [ClientID: Date] = [:]
     private var health: [ClientID: ClientHealth] = [:]
     private var library = Library()
+    /// Set once `store.load()` has succeeded. Until then the in-memory library is a placeholder
+    /// and must never be written back.
+    private var loaded = false
+    public private(set) var lastError: String?
     private var watcher: FileWatcher?
     private var watchTask: Task<Void, Never>?
     private var listeners: [UUID: @Sendable (Library) -> Void] = [:]
@@ -24,7 +37,13 @@ public actor SyncCoordinator {
     }
 
     public func currentLibrary() -> Library { library }
-    public func clientHealth() -> [ClientID: ClientHealth] { health }
+    public func lastSyncError() -> String? { lastError }
+
+    /// Health of the clients that are installed right now.
+    public func clientHealth() -> [ClientID: ClientHealth] {
+        let installed = Set(adapters.filter { $0.isInstalled() }.map(\.id))
+        return health.filter { installed.contains($0.key) }
+    }
 
     /// Called on any change to the library (after sync). Returns a token to remove later.
     public func addListener(_ f: @escaping @Sendable (Library) -> Void) -> UUID {
@@ -35,7 +54,13 @@ public actor SyncCoordinator {
     /// Load library from disk (throws if corrupt), read all clients, plan, write. Returns the plan.
     @discardableResult
     public func runOnce(now: Date = .init()) async throws -> SyncOutput {
-        library = try store.load()
+        do {
+            library = try store.load()
+            loaded = true
+        } catch {
+            lastError = String(describing: error)
+            throw error
+        }
         return try sync(now: now)
     }
 
@@ -43,38 +68,70 @@ public actor SyncCoordinator {
     /// "client wins on presence" rule is skipped for this pass (otherwise enabling a server for a
     /// client whose file doesn't have it yet would be immediately undone).
     public func mutate(_ f: (inout Library) throws -> Void) async throws {
+        guard loaded else { throw SyncCoordinatorError.notLoaded }
+        let before = library
         try f(&library)
         try store.save(library)
-        _ = try sync(skipPresence: true)
+        _ = try sync(skipPresence: true, alreadyChanged: library != before)
     }
 
-    private func sync(now: Date = .init(), skipPresence: Bool = false) throws -> SyncOutput {
+    /// `alreadyChanged` reports an edit made to `library` before this pass, so listeners still hear
+    /// about a mutation that the plan itself leaves untouched.
+    private func sync(now: Date = .init(), skipPresence: Bool = false,
+                      alreadyChanged: Bool = false) throws -> SyncOutput {
+        lastError = nil
+        let unwatched = Set(watcher?.unwatched() ?? [])
         var snapshots: [ClientID: [ExternalServer]] = [:]
+        var reads: [ClientID: Data?] = [:]
         for a in adapters where a.isInstalled() {
             do {
-                snapshots[a.id] = try a.parse(try a.readData())
-                health[a.id] = ClientHealth(healthy: true, error: nil, lastSync: now)
+                let data = try a.readData()
+                snapshots[a.id] = try a.parse(data)
+                reads.updateValue(data, forKey: a.id)
+                health[a.id] = ClientHealth(healthy: true, error: nil, lastSync: now,
+                                            watched: !unwatched.contains(a.id))
             } catch {
-                health[a.id] = ClientHealth(healthy: false, error: String(describing: error), lastSync: health[a.id]?.lastSync)
+                health[a.id] = ClientHealth(healthy: false, error: String(describing: error),
+                                            lastSync: health[a.id]?.lastSync, watched: !unwatched.contains(a.id))
             }
         }
         let suppressed = skipPresence ? Set(snapshots.keys) : Set(suppressedUntil.filter { $0.value > now }.keys)
         let out = SyncEngine.plan(SyncInput(library: library, snapshots: snapshots, suppressed: suppressed,
                                             gatewayPort: gatewayPort, now: now))
-        if out.library != library {
+        let planChanged = out.library != library
+        if planChanged {
             library = out.library
             try store.save(library)
         }
+
+        // A client that can't be written is that client's problem: record it and carry on, since
+        // the library is already saved and the other clients still deserve their update.
+        var failures: [String] = []
         for (client, desired) in out.writes {
             guard let a = adapters.first(where: { $0.id == client }) else { continue }
-            let current = try a.readData()
-            let data = try a.render(desired, over: current)
-            guard data != current else { continue }
-            try backups.backup(a.configPath, for: client, at: now)
-            try AtomicFile.write(data, to: a.configPath)
-            suppressedUntil[client] = now.addingTimeInterval(suppressWindow)
+            do {
+                let current = reads[client] ?? nil
+                let data = try a.render(desired, over: current)
+                guard data != current else { continue }
+                try backups.backup(a.configPath, for: client, at: now)
+                try AtomicFile.write(data, to: a.configPath)
+                // Timed from the write, not from the start of the pass, so a slow pass doesn't
+                // eat into the window in which our own write comes back at us as a file event.
+                suppressedUntil[client] = Date().addingTimeInterval(suppressWindow)
+            } catch {
+                health[client] = ClientHealth(healthy: false, error: String(describing: error),
+                                              lastSync: health[client]?.lastSync,
+                                              watched: health[client]?.watched ?? true)
+                failures.append("\(client.rawValue): \(error)")
+            }
         }
-        for l in listeners.values { l(library) }
+        if !failures.isEmpty { lastError = failures.joined(separator: "; ") }
+
+        // Off the actor, so one slow listener can't stall the next sync.
+        if planChanged || alreadyChanged {
+            let lib = library
+            for l in listeners.values { Task { l(lib) } }
+        }
         return out
     }
 
@@ -88,10 +145,13 @@ public actor SyncCoordinator {
         watchTask = Task { [weak self] in
             for await _ in stream {
                 guard let self else { return }
-                _ = try? await self.runOnce()
+                do { _ = try await self.runOnce() }
+                catch { await self.setLastError(String(describing: error)) }
             }
         }
     }
+
+    private func setLastError(_ message: String) { lastError = message }
 
     public func stopWatching() {
         watcher?.stop(); watcher = nil

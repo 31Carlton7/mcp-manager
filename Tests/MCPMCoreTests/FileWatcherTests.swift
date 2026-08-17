@@ -29,6 +29,43 @@ import Foundation
     #expect(events == [.cursor, .cursor])
 }
 
+@Test func watcherWaitsAtAnAncestorUntilTheConfigDirectoryAppears() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("mcpm-w-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let dir = root.appendingPathComponent("cursor")          // does not exist yet
+    let file = dir.appendingPathComponent("mcp.json")
+
+    let watcher = FileWatcher(paths: [.cursor: file], debounce: .milliseconds(100))
+    let stream = watcher.start()
+    #expect(watcher.unwatched().isEmpty)                      // standing in at `root`
+    let collector = Task { () -> [ClientID] in
+        var events: [ClientID] = []
+        for await c in stream { events.append(c) }
+        return events
+    }
+
+    try await Task.sleep(for: .milliseconds(100))
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    try await Task.sleep(for: .milliseconds(200))
+    try Data("a".utf8).write(to: file)
+    try await Task.sleep(for: .milliseconds(500))
+    watcher.stop()
+    #expect(await collector.value == [.cursor])
+}
+
+@Test func watcherStartIsIdempotent() async throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("mcpm-w-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let file = dir.appendingPathComponent("mcp.json")
+    try Data("a".utf8).write(to: file)
+
+    let watcher = FileWatcher(paths: [.cursor: file], debounce: .milliseconds(50))
+    _ = watcher.start()
+    _ = watcher.start()
+    defer { watcher.stop() }
+    #expect(watcher.sourceCount == 2)
+}
+
 @Test func watcherReArmsWithoutAccumulatingSources() async throws {
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent("mcpm-w-\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
