@@ -87,6 +87,7 @@ private func upstreamRouter(hits: Hits, guardedToken: String) -> Router<BasicReq
 
     for method in [HTTPRequest.Method.get, .post, .delete] {
         router.on("/mcp", method: method) { request, _ in
+            await hits.bump()
             var seen: [String: String] = [:]
             for field in request.headers { seen[field.name.canonicalName] = field.value }
             let body = try await request.body.collect(upTo: 4 * 1024 * 1024)
@@ -99,8 +100,14 @@ private func upstreamRouter(hits: Hits, guardedToken: String) -> Router<BasicReq
             let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
             var headers: HTTPFields = [.contentType: "application/json"]
             headers[.mcpSessionID] = seen["mcp-session-id"] ?? "sess-42"
+            headers[.setCookie] = "sid=1; Path=/"
             return Response(status: .ok, headers: headers, body: .init(byteBuffer: ByteBuffer(bytes: data)))
         }
+    }
+
+    // Points at /mcp, so a proxy that followed it would show up as a hit there.
+    router.get("/redirect") { _, _ in
+        Response(status: .found, headers: [.location: "/mcp"], body: .init())
     }
 
     router.get("/sse") { _, _ in
@@ -132,13 +139,15 @@ extension HTTPField.Name {
     static let mcpSessionID = HTTPField.Name("Mcp-Session-Id")!
 }
 
+/// `hits` also counts /mcp, so "the proxy never went there" is checkable.
+
 // MARK: - Fixture
 
 private struct Fixture {
     var base: URL
     var upstream: URL
     var source: FakeServerSource
-    var store: FileTokenStore
+    var store: any TokenStore
     var http: FakeHTTPClient
     var auth: AuthManager
     var hits: Hits
@@ -163,7 +172,8 @@ private func withGateway(
     guardedToken: String = "at-2",
     maxRequestBytes: Int = 10 * 1024 * 1024,
     servers: (URL) -> [Server],
-    setUp: (FileTokenStore, FakeHTTPClient) throws -> Void = { _, _ in },
+    store: (any TokenStore)? = nil,
+    setUp: (any TokenStore, FakeHTTPClient) throws -> Void = { _, _ in },
     _ body: (Fixture) async throws -> Void
 ) async throws {
     let hits = Hits()
@@ -171,7 +181,7 @@ private func withGateway(
     try await upstream.start(upstreamRouter(hits: hits, guardedToken: guardedToken))
     let upstreamBase = await upstream.baseURL
 
-    let store = FileTokenStore(url: try tmpDir().appendingPathComponent("tokens.json"))
+    let store = try store ?? FileTokenStore(url: tmpDir().appendingPathComponent("tokens.json"))
     let http = FakeHTTPClient()
     try setUp(store, http)
     let auth = AuthManager(store: store, oauth: OAuthClient(http: http),
@@ -180,9 +190,9 @@ private func withGateway(
     let source = FakeServerSource()
     for server in servers(upstreamBase) { await source.add(server) }
 
+    // No `upstream:` — the tests exercise the hardened session the daemon actually proxies through.
     let gateway = Gateway(config: GatewayConfig(port: 0, maxRequestBytes: maxRequestBytes),
-                          auth: auth, servers: source,
-                          upstream: URLSession(configuration: .ephemeral))
+                          auth: auth, servers: source)
     try await gateway.start()
     let port = await gateway.boundPort
 
@@ -342,6 +352,52 @@ private func oauthServers(_ upstream: URL) -> [Server] {
         let echo = try Echo(data)
         #expect(echo.headers["x-api-key"] == "sekret")
         #expect(echo.headers["authorization"] == nil)
+    }
+}
+
+@Test func cookiesAreStrippedInBothDirections() async throws {
+    try await withGateway(servers: oauthServers) { store, _ in
+        try store.setToken(storedToken(access: "at-1"), for: "notion")
+    } _: { fixture in
+        let (response, data) = try await fixture.send(
+            "/s/notion/mcp", headers: ["Cookie": "session=abc", "X-Custom": "kept"])
+
+        let echo = try Echo(data)
+        // An ordinary header still travels, so the absence of the cookie is the policy and not an
+        // accident of how the request was built.
+        #expect(echo.headers["x-custom"] == "kept")
+        #expect(echo.headers["cookie"] == nil)
+        #expect(response.value(forHTTPHeaderField: "Set-Cookie") == nil)
+    }
+}
+
+@Test func anUpstreamRedirectIsRefusedInsteadOfFollowedWithTheToken() async throws {
+    try await withGateway(servers: { upstream in
+        [remote(id: "notion", name: "Notion",
+                url: upstream.appendingPathComponent("redirect").absoluteString, auth: .oauth)]
+    }, setUp: { store, _ in
+        try store.setToken(storedToken(access: "at-1"), for: "notion")
+    }) { fixture in
+        let (response, data) = try await fixture.send("/s/notion/mcp", method: "GET")
+
+        #expect(response.statusCode == 502)
+        #expect(String(decoding: data, as: UTF8.self).contains("upstream_redirect"))
+        // The Location target was never requested: the bearer stayed with the host we vetted.
+        #expect(await fixture.hits.count == 0)
+    }
+}
+
+@Test func anUnreadableStoreAnswers503AndDoesNotAskForASignIn() async throws {
+    try await withGateway(servers: oauthServers, store: BrokenTokenStore()) { fixture in
+        let (response, data) = try await fixture.send("/s/notion/mcp")
+
+        #expect(response.statusCode == 503)
+        let json = try #require(try JSONSerialization.jsonObject(with: data) as? [String: String])
+        #expect(json["error"] == "unavailable")
+        #expect(json["message"] == "token store unavailable")
+        // A locked keychain is not a reason to tell the user their sign-in expired.
+        #expect(await fixture.source.flagged.isEmpty)
+        #expect(await fixture.hits.count == 0)
     }
 }
 

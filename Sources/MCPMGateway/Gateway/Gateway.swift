@@ -19,7 +19,7 @@ public struct GatewayConfig: Sendable {
     public var maxRequestBytes: Int
 
     public init(host: String = "127.0.0.1", port: Int = 7337,
-                hostAllowlist: Set<String> = ["localhost", "127.0.0.1"],
+                hostAllowlist: Set<String> = ["localhost", "127.0.0.1", "::1"],
                 maxRequestBytes: Int = 10 * 1024 * 1024) {
         self.host = host
         self.port = port
@@ -67,11 +67,15 @@ public actor Gateway {
     /// The port actually bound. Equals `config.port` unless that was 0.
     public private(set) var boundPort: Int = 0
 
+    /// `upstream` is the session requests are proxied through. The default is a hardened private
+    /// session (no redirects, no cookies, no cache, long timeouts for idle streams); pass one only
+    /// to observe the traffic in tests.
     public init(config: GatewayConfig, auth: AuthManager, servers: any GatewayServerSource,
-                upstream: URLSession = .shared) {
+                upstream: URLSession? = nil) {
         self.config = config
         self.auth = auth
-        self.proxy = Proxy(config: config, auth: auth, servers: servers, upstream: upstream)
+        self.proxy = Proxy(config: config, auth: auth, servers: servers,
+                           upstream: upstream ?? Proxy.makeSession())
     }
 
     /// Binds the socket and starts serving. Returns once the port is known, so callers can write

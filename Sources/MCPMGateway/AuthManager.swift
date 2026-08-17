@@ -21,12 +21,17 @@ public enum AuthError: Error, Equatable, Sendable, CustomStringConvertible {
     /// A callback whose `state` we never issued, already redeemed, or that timed out.
     case invalidState
     case missingCode
+    /// The credential store could not be read or written — a locked Keychain, a damaged file. This
+    /// is emphatically not `needsAuth`: the credential may well be fine, and the caller must not
+    /// react by telling the user to sign in again.
+    case storeUnavailable(String)
 
     public var description: String {
         switch self {
         case let .needsAuth(id): return "\(id) needs to be signed in again"
         case .invalidState: return "the authorization response did not match a pending sign-in"
         case .missingCode: return "the authorization response carried no code"
+        case let .storeUnavailable(why): return "the credential store is unavailable: \(why)"
         }
     }
 }
@@ -61,6 +66,9 @@ public actor AuthManager {
     private var refreshing: [String: Task<TokenRecord, Error>] = [:]
 
     /// Server ids whose stored credentials just changed, so the daemon can push a status update.
+    ///
+    /// Single-consumer, like every `AsyncStream`: exactly one task may iterate it (in production,
+    /// the daemon's status pump). A second iteration would steal elements from the first.
     public nonisolated let stateChanged: AsyncStream<String>
     private nonisolated let changes: AsyncStream<String>.Continuation
 
@@ -171,16 +179,29 @@ public actor AuthManager {
     /// The `Authorization: Bearer` value for a proxied request, refreshed first if it is about to
     /// expire.
     public func bearer(for id: String) async throws -> String {
-        guard let record = try? store.token(for: id) else { throw AuthError.needsAuth(id: id) }
+        guard let record = try storedToken(id) else { throw AuthError.needsAuth(id: id) }
         if record.isFresh(now: now(), slack: Self.refreshSlack) { return record.accessToken }
+        // There is nothing to refresh with, so send what we have and let the server judge it.
+        // Deleting a credential on suspicion belongs to `forceRefresh`, after an actual rejection.
+        guard record.refreshToken != nil else { return record.accessToken }
         return try await refresh(id: id, record: record).accessToken
     }
 
     /// After an upstream 401: refresh regardless of what the stored expiry claims. A grant the
     /// server has already rejected is deleted, so the UI can ask for a new sign-in.
-    public func forceRefresh(id: String) async throws -> String {
-        guard let record = try? store.token(for: id) else { throw AuthError.needsAuth(id: id) }
+    ///
+    /// `rejectedAccessToken` is the token the caller actually sent. If the stored one has moved on
+    /// since — a concurrent request refreshed while this one was in flight — the newer token is
+    /// handed back as-is rather than spending a second (single-use, rotating) refresh token.
+    public func forceRefresh(id: String, rejectedAccessToken: String? = nil) async throws -> String {
+        guard let record = try storedToken(id) else { throw AuthError.needsAuth(id: id) }
+        if let rejected = rejectedAccessToken, record.accessToken != rejected { return record.accessToken }
         return try await refresh(id: id, record: record).accessToken
+    }
+
+    /// A store read, with failure kept distinct from absence.
+    private func storedToken(_ id: String) throws -> TokenRecord? {
+        do { return try store.token(for: id) } catch { throw AuthError.storeUnavailable("\(error)") }
     }
 
     /// Coalesces concurrent refreshes: whoever arrives while one is in flight waits for its result
@@ -216,7 +237,8 @@ public actor AuthManager {
             tokenEndpoint: record.tokenEndpoint,
             revocationEndpoint: record.revocationEndpoint,
             resource: record.resource)
-        try store.setToken(updated, for: id)
+        do { try store.setToken(updated, for: id) }
+        catch { throw AuthError.storeUnavailable("\(error)") }
         changes.yield(id)
         return updated
     }
@@ -233,20 +255,25 @@ public actor AuthManager {
     /// Drops every credential we hold for a server, revoking the token first when the authorization
     /// server offers somewhere to revoke it.
     public func signOut(id: String) async {
+        await clearCredentials(id: id)
+        changes.yield(id)
+    }
+
+    /// Sign out, and forget the client we registered — the next sign-in registers a fresh one.
+    /// One transition, so one notification.
+    public func forget(id: String) async {
+        await clearCredentials(id: id)
+        try? store.removeClientRegistration(for: id)
+        changes.yield(id)
+    }
+
+    private func clearCredentials(id: String) async {
         if let record = try? store.token(for: id) {
             await oauth.revoke(record)
         }
         try? store.removeToken(for: id)
         try? store.removeHeader(for: id)
         pending = pending.filter { $0.value.id != id }
-        changes.yield(id)
-    }
-
-    /// Sign out, and forget the client we registered — the next sign-in registers a fresh one.
-    public func forget(id: String) async {
-        await signOut(id: id)
-        try? store.removeClientRegistration(for: id)
-        changes.yield(id)
     }
 
     // MARK: - Header auth
@@ -256,8 +283,8 @@ public actor AuthManager {
         changes.yield(id)
     }
 
-    public func header(for id: String) -> HeaderSecret? {
-        try? store.header(for: id)
+    public func header(for id: String) throws -> HeaderSecret? {
+        do { return try store.header(for: id) } catch { throw AuthError.storeUnavailable("\(error)") }
     }
 
     // MARK: -

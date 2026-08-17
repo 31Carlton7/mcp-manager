@@ -38,6 +38,23 @@ private func makeManager(_ http: FakeHTTPClient, _ store: FileTokenStore,
     AuthManager(store: store, oauth: OAuthClient(http: http), redirectURI: callbackURI, now: clock.closure)
 }
 
+/// Every operation fails, the way a locked Keychain does.
+struct StoreFailure: Error, CustomStringConvertible {
+    var description: String { "the keychain is locked" }
+}
+
+final class BrokenTokenStore: TokenStore, @unchecked Sendable {
+    func token(for id: String) throws -> TokenRecord? { throw StoreFailure() }
+    func setToken(_ token: TokenRecord, for id: String) throws { throw StoreFailure() }
+    func removeToken(for id: String) throws { throw StoreFailure() }
+    func header(for id: String) throws -> HeaderSecret? { throw StoreFailure() }
+    func setHeader(_ header: HeaderSecret, for id: String) throws { throw StoreFailure() }
+    func removeHeader(for id: String) throws { throw StoreFailure() }
+    func clientRegistration(for id: String) throws -> ClientRegistration? { throw StoreFailure() }
+    func setClientRegistration(_ registration: ClientRegistration, for id: String) throws { throw StoreFailure() }
+    func removeClientRegistration(for id: String) throws { throw StoreFailure() }
+}
+
 private func newStore() throws -> FileTokenStore {
     FileTokenStore(url: try tmpDir().appendingPathComponent("tokens.json"))
 }
@@ -317,6 +334,39 @@ private func signIn(_ mgr: AuthManager, _ http: FakeHTTPClient, id: String = "no
     #expect(try await mgr.forceRefresh(id: "notion") == "at-2")
 }
 
+@Test func forceRefreshSkipsTheExchangeWhenAnotherRequestAlreadyRotatedTheToken() async throws {
+    let http = FakeHTTPClient()
+    stubNotionDiscovery(http)
+    stubToken(http, access: "at-1", expiresIn: 3600)
+    let mgr = makeManager(http, try newStore())
+    _ = try await signIn(mgr, http)
+
+    stubToken(http, access: "at-2", expiresIn: 3600, replacing: true)
+    let exchanges = http.requestCount(to: tokenEndpoint)
+
+    // Two requests were in flight with at-1 and both came back 401. The first refresh rotates the
+    // token; the second must notice and spend nothing.
+    #expect(try await mgr.forceRefresh(id: "notion", rejectedAccessToken: "at-1") == "at-2")
+    #expect(try await mgr.forceRefresh(id: "notion", rejectedAccessToken: "at-1") == "at-2")
+    #expect(http.requestCount(to: tokenEndpoint) - exchanges == 1)
+}
+
+@Test func bearerHandsOverATokenItCannotRefreshInsteadOfDeletingIt() async throws {
+    let http = FakeHTTPClient()
+    stubNotionDiscovery(http)
+    // Expiring inside the refresh window, and no refresh token to trade in.
+    stubToken(http, access: "at-1", refresh: nil, expiresIn: 30)
+    let store = try newStore()
+    let mgr = makeManager(http, store)
+    _ = try await signIn(mgr, http)
+    let exchanges = http.requestCount(to: tokenEndpoint)
+
+    #expect(try await mgr.bearer(for: "notion") == "at-1")
+    #expect(http.requestCount(to: tokenEndpoint) == exchanges)
+    // Only a rejection from the server is grounds for signing out.
+    #expect(try store.token(for: "notion")?.accessToken == "at-1")
+}
+
 @Test func forceRefreshOnAnInvalidGrantDropsTheTokenAndAsksForSignIn() async throws {
     let http = FakeHTTPClient()
     stubNotionDiscovery(http)
@@ -404,7 +454,7 @@ private func signIn(_ mgr: AuthManager, _ http: FakeHTTPClient, id: String = "no
     try await mgr.setHeader(id: "linear", name: "X-Api-Key", value: "sekret")
 
     #expect(await mgr.state(for: "linear", auth: .header) == .connected)
-    #expect(await mgr.header(for: "linear") == HeaderSecret(name: "X-Api-Key", value: "sekret"))
+    #expect(try await mgr.header(for: "linear") == HeaderSecret(name: "X-Api-Key", value: "sekret"))
     #expect(try store.header(for: "linear")?.value == "sekret")
 }
 
@@ -417,6 +467,27 @@ private func signIn(_ mgr: AuthManager, _ http: FakeHTTPClient, id: String = "no
 
     #expect(await mgr.state(for: "linear", auth: .header) == .needsAuth)
     #expect(try store.header(for: "linear") == nil)
+}
+
+// MARK: - An unreadable store
+
+@Test func anUnreadableStoreIsAnErrorRatherThanASignedOutServer() async throws {
+    let mgr = AuthManager(store: BrokenTokenStore(), oauth: OAuthClient(http: FakeHTTPClient()),
+                          redirectURI: callbackURI)
+
+    #expect(await mgr.state(for: "notion", auth: .oauth) == .error)
+    #expect(await mgr.state(for: "linear", auth: .header) == .error)
+
+    // The difference matters: `needsAuth` would send the user through a sign-in that cannot help.
+    await #expect(throws: AuthError.storeUnavailable("the keychain is locked")) {
+        _ = try await mgr.bearer(for: "notion")
+    }
+    await #expect(throws: AuthError.storeUnavailable("the keychain is locked")) {
+        _ = try await mgr.forceRefresh(id: "notion")
+    }
+    await #expect(throws: AuthError.storeUnavailable("the keychain is locked")) {
+        _ = try await mgr.header(for: "linear")
+    }
 }
 
 @Test func aServerWithoutAuthHasNoAuthState() async throws {
@@ -448,11 +519,14 @@ private func signIn(_ mgr: AuthManager, _ http: FakeHTTPClient, id: String = "no
     _ = try await signIn(mgr, http)
     try await mgr.setHeader(id: "linear", name: "X-Api-Key", value: "k")
     await mgr.signOut(id: "notion")
+    await mgr.forget(id: "notion")
+    // The last event is what proves forgetting reported one transition and not two.
+    try await mgr.setHeader(id: "canary", name: "X-Api-Key", value: "k")
 
     var seen: [String] = []
     for await id in mgr.stateChanged {
         seen.append(id)
-        if seen.count == 3 { break }
+        if seen.count == 5 { break }
     }
-    #expect(seen == ["notion", "linear", "notion"])
+    #expect(seen == ["notion", "linear", "notion", "notion", "canary"])
 }
