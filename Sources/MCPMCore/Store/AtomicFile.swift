@@ -6,10 +6,15 @@ public enum AtomicFile {
         let dir = url.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let tmp = url.appendingPathExtension("tmp")
-        try data.write(to: tmp, options: .atomic)
+        try data.write(to: tmp)
         if let mode {
             try FileManager.default.setAttributes([.posixPermissions: mode], ofItemAtPath: tmp.path)
         }
         _ = try FileManager.default.replaceItemAt(url, withItemAt: tmp)
+        if let mode {
+            // replaceItemAt preserves the *original* file's metadata when the target already
+            // exists, so a pre-existing file's mode would otherwise survive the overwrite.
+            try FileManager.default.setAttributes([.posixPermissions: mode], ofItemAtPath: url.path)
+        }
     }
 }

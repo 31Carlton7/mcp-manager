@@ -56,3 +56,11 @@ import Foundation
                        auth: .none, clients: [:], source: "manual", createdAt: .init())
     #expect(plain.external(gatewayPort: 7337).url == "https://mcp.context7.com/mcp")
 }
+
+@Test func gatewayURLServerIDParsing() {
+    #expect(GatewayURL.serverID(from: "http://localhost:7337/s/notion/mcp", port: 7337) == "notion")
+    #expect(GatewayURL.serverID(from: "http://127.0.0.1:7337/s/notion/mcp", port: 7337) == "notion")
+    #expect(GatewayURL.serverID(from: "http://localhost:9999/s/notion/mcp", port: 7337) == nil)
+    #expect(GatewayURL.serverID(from: "https://mcp.notion.com/mcp", port: 7337) == nil)
+    #expect(GatewayURL.serverID(from: "http://localhost:7337/other/notion/mcp", port: 7337) == nil)
+}

@@ -31,3 +31,20 @@ private func tmpDir() throws -> URL {
     let store = Store(url: url)
     #expect(throws: StoreError.self) { try store.load() }
 }
+
+@Test func storeSaveEnforcesModeOnOverwrite() throws {
+    let url = try tmpDir().appendingPathComponent("servers.json")
+    try Data("{}".utf8).write(to: url)
+    try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path)
+    let store = Store(url: url)
+    try store.save(Library())
+    let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
+    #expect((attrs[.posixPermissions] as? Int) == 0o600)
+}
+
+@Test func storeThrowsUnreadableWhenPathIsDirectory() throws {
+    let url = try tmpDir().appendingPathComponent("servers.json")
+    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+    let store = Store(url: url)
+    #expect(throws: StoreError.self) { try store.load() }
+}
