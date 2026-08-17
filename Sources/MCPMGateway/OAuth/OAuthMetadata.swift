@@ -71,6 +71,56 @@ public struct AuthorizationServerMetadata: Codable, Equatable, Sendable {
     public var supportsS256: Bool {
         codeChallengeMethodsSupported?.contains("S256") ?? true
     }
+
+    /// Every endpoint we might send a request to, for transport checks.
+    public var endpoints: [URL] {
+        [authorizationEndpoint, tokenEndpoint, registrationEndpoint, revocationEndpoint].compactMap { $0 }
+    }
+}
+
+// MARK: - Identity and transport checks
+
+/// Scheme, host, port and path, normalized for comparison: lowercased scheme and host, default
+/// ports and a trailing slash removed, query and fragment dropped.
+func normalizedIdentity(_ url: URL) -> String {
+    let scheme = (url.scheme ?? "").lowercased()
+    let host = (url.host ?? "").lowercased()
+    var port = ""
+    if let p = url.port, !((scheme == "https" && p == 443) || (scheme == "http" && p == 80)) {
+        port = ":\(p)"
+    }
+    return "\(scheme)://\(host)\(port)\(discoveryPath(of: url))"
+}
+
+/// RFC 8414 §3.3: the `issuer` in the document must be the issuer whose well-known URL we asked.
+/// Anything else is an authorization-server mix-up.
+func issuerMatches(_ documentIssuer: URL, expected: URL) -> Bool {
+    normalizedIdentity(documentIssuer) == normalizedIdentity(expected)
+}
+
+/// RFC 9728 §3.3, loosened by one step that servers actually rely on: metadata may name a prefix of
+/// the resource — most commonly the bare origin covering every path under it.
+func resourceMatches(_ advertised: String, requested: URL) -> Bool {
+    guard let advertisedURL = URL(string: advertised), advertisedURL.host != nil else { return false }
+    let a = normalizedIdentity(advertisedURL)
+    let r = normalizedIdentity(requested)
+    return r == a || r.hasPrefix(a + "/")
+}
+
+/// Loopback is the one place plain HTTP is allowed: local MCP servers under development, and our
+/// own `http://localhost:7337/oauth/callback` redirect.
+func isLoopback(_ url: URL) -> Bool {
+    switch (url.host ?? "").lowercased() {
+    case "localhost", "127.0.0.1", "::1", "[::1]": return true
+    default: return false
+    }
+}
+
+/// Tokens must never cross a plaintext hop. Throws `OAuthError.insecureEndpoint` for anything that
+/// is not HTTPS or loopback.
+func requireSecure(_ url: URL) throws {
+    guard (url.scheme ?? "").lowercased() != "https" else { return }
+    guard isLoopback(url) else { throw OAuthError.insecureEndpoint(url) }
 }
 
 // MARK: - Discovery URL rules

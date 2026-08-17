@@ -16,25 +16,54 @@ public enum HTTPClientError: Error, CustomStringConvertible {
     }
 }
 
+/// Hands the 3xx back to the caller instead of chasing it. A redirect from a metadata or token
+/// endpoint would otherwise re-send the request — and any credential on it — to whatever host the
+/// server named in `Location`, after our HTTPS and issuer checks have already run.
+final class NoRedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(nil)
+    }
+}
+
 public struct URLSessionHTTPClient: HTTPClient {
+    /// OAuth metadata and token responses are small. A larger body is a misrouted request or an
+    /// attempt to make us buffer something big, and never a document we want to parse.
+    static let maxResponseBytes = 1024 * 1024
+
     private let session: URLSession
 
-    public init(session: URLSession = .shared) {
-        self.session = session
-    }
-
-    /// A session that never writes to the shared URL cache — token responses have no business in it.
-    public static func ephemeral(timeout: TimeInterval = 15) -> URLSessionHTTPClient {
+    /// The default: a private session with no cache and no redirect following. Nothing here shares
+    /// state with `URLSession.shared`, where token responses have no business.
+    public init(timeout: TimeInterval = 15) {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = timeout
+        config.timeoutIntervalForResource = timeout * 2
         config.urlCache = nil
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
-        return URLSessionHTTPClient(session: URLSession(configuration: config))
+        config.httpCookieStorage = nil
+        config.httpShouldSetCookies = false
+        self.session = URLSession(configuration: config, delegate: NoRedirectDelegate(), delegateQueue: nil)
+    }
+
+    /// Injection point for callers that own their session.
+    public init(session: URLSession) {
+        self.session = session
     }
 
     public func send(_ req: URLRequest) async throws -> (Data, HTTPURLResponse) {
         let (data, response) = try await session.data(for: req)
         guard let http = response as? HTTPURLResponse else { throw HTTPClientError.notHTTP(req.url) }
+        try Self.checkSize(data, from: req.url)
         return (data, http)
+    }
+
+    static func checkSize(_ data: Data, from url: URL?) throws {
+        guard data.count <= maxResponseBytes else {
+            throw OAuthError.invalidResponse(
+                "\(url?.absoluteString ?? "response") returned \(data.count) bytes, over the \(maxResponseBytes) limit")
+        }
     }
 }

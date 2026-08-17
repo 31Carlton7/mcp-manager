@@ -61,4 +61,5 @@ public final class FileTokenStore: TokenStore, @unchecked Sendable {
     public func setClientRegistration(_ registration: ClientRegistration, for id: String) throws {
         try mutate { $0.registrations[id] = registration }
     }
+    public func removeClientRegistration(for id: String) throws { try mutate { $0.registrations[id] = nil } }
 }

@@ -7,6 +7,8 @@ public enum OAuthError: Error, Equatable, CustomStringConvertible {
     /// The refresh token (or authorization code) is dead — sign in again.
     case invalidGrant
     case noRefreshToken
+    /// An OAuth endpoint that is neither HTTPS nor loopback — we will not send a token over it.
+    case insecureEndpoint(URL)
     /// An `error` / `error_description` pair from an OAuth endpoint.
     case server(status: Int, code: String?, description: String?)
     /// The authorization server redirected back with an `error` parameter.
@@ -21,6 +23,8 @@ public enum OAuthError: Error, Equatable, CustomStringConvertible {
             return "the stored grant is no longer valid"
         case .noRefreshToken:
             return "no refresh token was issued"
+        case let .insecureEndpoint(url):
+            return "refusing to use \(url.absoluteString) — OAuth endpoints must use HTTPS"
         case let .server(status, code, description):
             return "OAuth error \(status)" + [code, description].compactMap { $0 }
                 .reduce("") { $0 + ": " + $1 }
@@ -101,34 +105,61 @@ public struct OAuthClient: Sendable {
     // MARK: - Discovery
 
     /// Walks the RFC 9728 → RFC 8414 chain. Every step is optional: a server that publishes
-    /// nothing still resolves, to the conventional endpoints at its origin.
+    /// nothing still resolves, to the conventional endpoints at its origin. Documents that do not
+    /// identify themselves as the resource or issuer we asked for are skipped rather than trusted.
     public func discover(resource: URL) async throws -> Discovery {
+        var broken: OAuthError?
+
         var prm: ProtectedResourceMetadata?
         for candidate in discoveryCandidates(resource: resource) {
-            if let found: ProtectedResourceMetadata = await fetchJSON(candidate) {
-                prm = found
-                break
-            }
+            guard let found: ProtectedResourceMetadata = try await fetchJSON(candidate, broken: &broken),
+                  resourceMatches(found.resource, requested: resource) else { continue }
+            prm = found
+            break
         }
 
-        let issuer = prm?.authorizationServers.first.flatMap(URL.init(string:)) ?? originURL(resource, path: "")
+        let issuer: URL
+        if let advertised = prm?.authorizationServers.first {
+            guard let url = URL(string: advertised), url.host != nil else {
+                throw OAuthError.invalidResponse("authorization_servers entry \"\(advertised)\" is not a URL")
+            }
+            issuer = url
+        } else {
+            issuer = originURL(resource, path: "")
+        }
+        try requireSecure(issuer)
+
         var asMeta: AuthorizationServerMetadata?
         for candidate in asCandidates(issuer: issuer) {
-            if let found: AuthorizationServerMetadata = await fetchJSON(candidate) {
-                asMeta = found
-                break
-            }
+            guard let found: AuthorizationServerMetadata = try await fetchJSON(candidate, broken: &broken),
+                  issuerMatches(found.issuer, expected: issuer) else { continue }
+            asMeta = found
+            break
         }
 
+        // Guessing the conventional endpoints is only safe when the server genuinely publishes no
+        // metadata. If one of its well-known URLs failed, say so instead of inventing endpoints.
+        if asMeta == nil, let broken { throw broken }
+
         let meta = asMeta ?? .fallback(issuer: issuer)
+        for endpoint in meta.endpoints { try requireSecure(endpoint) }
         return Discovery(prm: prm, asMeta: meta, scopes: prm?.scopesSupported ?? meta.scopesSupported)
     }
 
-    private func fetchJSON<T: Decodable>(_ url: URL) async -> T? {
+    /// A discovery GET. Transport failures propagate — a dead network must not look like "this
+    /// server publishes no metadata". "Not here" (404/410) and documents that do not parse return
+    /// nil so the next candidate is tried; a server-side fault is remembered in `broken` so the
+    /// caller can refuse to fall back on a guess.
+    private func fetchJSON<T: Decodable>(_ url: URL, broken: inout OAuthError?) async throws -> T? {
         var req = URLRequest(url: url)
         req.httpMethod = "GET"
         req.setValue("application/json", forHTTPHeaderField: "Accept")
-        guard let (data, response) = try? await http.send(req), (200..<300).contains(response.statusCode) else {
+
+        let (data, response) = try await http.send(req)
+        guard (200..<300).contains(response.statusCode) else {
+            if response.statusCode != 404 && response.statusCode != 410 {
+                broken = broken ?? error(status: response.statusCode, body: data)
+            }
             return nil
         }
         return try? JSONDecoder().decode(T.self, from: data)
@@ -138,6 +169,7 @@ public struct OAuthClient: Sendable {
 
     public func register(asMeta: AuthorizationServerMetadata, redirectURI: URL) async throws -> ClientRegistration {
         guard let endpoint = asMeta.registrationEndpoint else { throw OAuthError.registrationUnsupported }
+        try requireSecure(endpoint)
 
         let body: [String: Any] = [
             "client_name": Self.clientName,
@@ -207,27 +239,44 @@ public struct OAuthClient: Sendable {
             ("client_id", clientID),
             ("redirect_uri", redirectURI.absoluteString),
         ]
-        if let clientSecret { form.append(("client_secret", clientSecret)) }
+        let basic = basicCredential(clientID: clientID, clientSecret: clientSecret,
+                                    methods: asMeta.tokenEndpointAuthMethodsSupported)
+        if basic == nil, let clientSecret { form.append(("client_secret", clientSecret)) }
         if let resource { form.append(("resource", resource)) }
-        return try await postForm(asMeta.tokenEndpoint, form)
+        return try await postForm(asMeta.tokenEndpoint, form, basic: basic)
     }
 
-    public func refresh(_ record: TokenRecord) async throws -> TokenResponse {
+    /// `authMethods` is the authorization server's `token_endpoint_auth_methods_supported`, when the
+    /// caller still has the metadata: a stored `TokenRecord` does not carry it, and the default
+    /// (secret in the body) is what nearly every server accepts.
+    public func refresh(_ record: TokenRecord, authMethods: [String]? = nil) async throws -> TokenResponse {
         guard let refreshToken = record.refreshToken else { throw OAuthError.noRefreshToken }
         var form: [(String, String)] = [
             ("grant_type", "refresh_token"),
             ("refresh_token", refreshToken),
             ("client_id", record.clientID),
         ]
-        if let secret = record.clientSecret { form.append(("client_secret", secret)) }
+        let basic = basicCredential(clientID: record.clientID, clientSecret: record.clientSecret,
+                                    methods: authMethods)
+        if basic == nil, let secret = record.clientSecret { form.append(("client_secret", secret)) }
         if let resource = record.resource { form.append(("resource", resource)) }
-        return try await postForm(record.tokenEndpoint, form)
+        return try await postForm(record.tokenEndpoint, form, basic: basic)
+    }
+
+    /// RFC 6749 §2.3.1 HTTP Basic, used only when the server offers `client_secret_basic` and not
+    /// `client_secret_post`. Both halves are form-urlencoded before base64.
+    private func basicCredential(clientID: String, clientSecret: String?, methods: [String]?) -> String? {
+        guard let clientSecret, let methods,
+              methods.contains("client_secret_basic"), !methods.contains("client_secret_post")
+        else { return nil }
+        let pair = "\(formEscape(clientID)):\(formEscape(clientSecret))"
+        return "Basic " + Data(pair.utf8).base64EncodedString()
     }
 
     /// Best effort: a failed revocation must not stop a sign-out, and plenty of servers do not
     /// implement the endpoint they advertise.
     public func revoke(_ record: TokenRecord) async {
-        guard let endpoint = record.revocationEndpoint else { return }
+        guard let endpoint = record.revocationEndpoint, (try? requireSecure(endpoint)) != nil else { return }
         let hint = record.refreshToken != nil ? "refresh_token" : "access_token"
         var form: [(String, String)] = [
             ("token", record.refreshToken ?? record.accessToken),
@@ -238,8 +287,12 @@ public struct OAuthClient: Sendable {
         _ = try? await http.send(formRequest(endpoint, form))
     }
 
-    private func postForm(_ url: URL, _ form: [(String, String)]) async throws -> TokenResponse {
-        let (data, response) = try await http.send(formRequest(url, form))
+    private func postForm(_ url: URL, _ form: [(String, String)],
+                          basic: String? = nil) async throws -> TokenResponse {
+        try requireSecure(url)
+        let (data, response) = try await http.send(formRequest(url, form, basic: basic))
+        // Anything outside 2xx — including a 3xx, which the HTTP client refuses to follow — is a
+        // failure, not something to re-request somewhere else.
         guard (200..<300).contains(response.statusCode) else {
             throw error(status: response.statusCode, body: data)
         }
@@ -250,11 +303,12 @@ public struct OAuthClient: Sendable {
         }
     }
 
-    private func formRequest(_ url: URL, _ form: [(String, String)]) -> URLRequest {
+    private func formRequest(_ url: URL, _ form: [(String, String)], basic: String? = nil) -> URLRequest {
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         req.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let basic { req.setValue(basic, forHTTPHeaderField: "Authorization") }
         req.httpBody = Data(form.map { "\(formEscape($0.0))=\(formEscape($0.1))" }
             .joined(separator: "&").utf8)
         return req

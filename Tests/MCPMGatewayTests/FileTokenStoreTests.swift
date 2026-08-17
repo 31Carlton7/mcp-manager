@@ -73,6 +73,23 @@ func sampleRecord(access: String = "at-1", expires: Date? = Date(timeIntervalSin
     try store.removeHeader(for: "nope")
 }
 
+@Test func signingOutKeepsTheClientRegistrationButForgettingDropsIt() throws {
+    let store = FileTokenStore(url: try tmpDir().appendingPathComponent("tokens.json"))
+    let registration = ClientRegistration(clientID: "cid", clientSecret: nil,
+                                          issuer: URL(string: "https://as.example")!)
+    try store.setToken(sampleRecord(), for: "notion")
+    try store.setClientRegistration(registration, for: "notion")
+
+    // Sign out: the token goes, the registration stays so the next sign-in reuses the client id.
+    try store.removeToken(for: "notion")
+    #expect(try store.clientRegistration(for: "notion") == registration)
+
+    // Forget: the registration goes too.
+    try store.removeClientRegistration(for: "notion")
+    #expect(try store.clientRegistration(for: "notion") == nil)
+    try store.removeClientRegistration(for: "never-registered")
+}
+
 @Test func fileTokenStoreWritesMode0600() throws {
     let url = try tmpDir().appendingPathComponent("tokens.json")
     let store = FileTokenStore(url: url)
@@ -102,6 +119,7 @@ func sampleRecord(access: String = "at-1", expires: Date? = Date(timeIntervalSin
     defer {
         try? store.removeToken(for: id)
         try? store.removeHeader(for: id)
+        try? store.removeClientRegistration(for: id)
     }
     #expect(try store.token(for: id) == nil)
 

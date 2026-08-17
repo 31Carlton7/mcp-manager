@@ -20,6 +20,10 @@ public enum KeychainError: Error, Equatable, CustomStringConvertible {
 /// Development note: an unsigned `mcpmd` gets a new code identity on every rebuild, so macOS shows
 /// the "wants to use your confidential information stored in …" panel each time. Set
 /// `MCPM_TOKEN_STORE=file` while developing to use `FileTokenStore` instead.
+///
+/// No `kSecAttrAccessGroup` is set yet: a shared access group between the app and the daemon needs
+/// both to be signed with the same Team ID, which arrives with signing and packaging in Plan 3.
+/// Until then each binary keeps its own items, and only `mcpmd` ever reads them.
 public struct KeychainTokenStore: TokenStore, Sendable {
     public let service: String
 

@@ -11,11 +11,21 @@ final class FakeHTTPClient: HTTPClient, @unchecked Sendable {
         var headers: [String: String] = ["Content-Type": "application/json"]
     }
 
+    struct TransportFailure: Error, Equatable {
+        var reason: String
+    }
+
     private let lock = NSLock()
     private var stubs: [String: [Stub]] = [:]
+    private var failures: Set<String> = []
     private var recorded: [URLRequest] = []
 
     init() {}
+
+    /// Makes one URL fail the way a dead network does — a thrown error, not a status code.
+    func stubTransportFailure(_ url: String) {
+        lock.withLock { _ = failures.insert(url) }
+    }
 
     /// Stubs one URL. Calling it repeatedly for the same URL queues responses: each request
     /// consumes the next, and the last one repeats.
@@ -44,9 +54,13 @@ final class FakeHTTPClient: HTTPClient, @unchecked Sendable {
     }
 
     func send(_ req: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        let key = req.url?.absoluteString ?? ""
+        if lock.withLock({ failures.contains(key) }) {
+            lock.withLock { recorded.append(req) }
+            throw TransportFailure(reason: "network is down")
+        }
         let stub = lock.withLock {
             recorded.append(req)
-            let key = req.url?.absoluteString ?? ""
             guard var queued = stubs[key], !queued.isEmpty else {
                 return Stub(status: 404, body: Data("not found".utf8), headers: [:])
             }

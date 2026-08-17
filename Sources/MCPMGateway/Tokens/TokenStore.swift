@@ -76,6 +76,8 @@ public protocol TokenStore: Sendable {
 
     func clientRegistration(for id: String) throws -> ClientRegistration?
     func setClientRegistration(_ registration: ClientRegistration, for id: String) throws
+    /// "Forget this server", as opposed to signing out: the next sign-in registers a new client.
+    func removeClientRegistration(for id: String) throws
 }
 
 enum TokenCoding {
