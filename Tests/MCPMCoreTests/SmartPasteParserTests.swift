@@ -1,0 +1,41 @@
+import Testing
+import Foundation
+@testable import MCPMCore
+
+@Test func parsesBareURLAsRemote() throws {
+    let r = SmartPasteParser.parse("  https://mcp.notion.com/mcp \n")
+    #expect(r.servers == [ExternalServer(name: "notion", kind: .remote, url: "https://mcp.notion.com/mcp")])
+    #expect(r.summary == "Remote server · mcp.notion.com")
+}
+
+@Test func parsesCommandLineWithQuotes() throws {
+    let r = SmartPasteParser.parse(#"npx -y @playwright/mcp@latest --browser "chrome canary""#)
+    #expect(r.servers == [ExternalServer(name: "playwright-mcp", kind: .stdio, command: "npx", args: ["-y", "@playwright/mcp@latest", "--browser", "chrome canary"])])
+    #expect(r.summary == "Local server · npx")
+}
+
+@Test func nameFromCommandBasenameWhenNoPackage() {
+    let r = SmartPasteParser.parse("/usr/local/bin/my-server --port 3")
+    #expect(r.servers.first?.name == "my-server")
+}
+
+@Test func parsesReadmeJSONWithMcpServersWrapper() throws {
+    let json = #"{"mcpServers":{"context7":{"url":"https://mcp.context7.com/mcp"},"fs":{"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","/tmp"],"env":{"A":"1"}}}}"#
+    let r = SmartPasteParser.parse(json)
+    #expect(Set(r.servers.map(\.name)) == ["context7", "fs"])
+    #expect(r.summary == "2 servers from JSON")
+}
+
+@Test func parsesNameMapAndBareObject() {
+    #expect(SmartPasteParser.parse(#"{"exa":{"url":"https://mcp.exa.ai/mcp","headers":{"X":"1"}}}"#).servers ==
+            [ExternalServer(name: "exa", kind: .remote, url: "https://mcp.exa.ai/mcp", headers: ["X": "1"])])
+    let bare = SmartPasteParser.parse(#"{"command":"uvx","args":["mcp-server-fetch"]}"#)
+    #expect(bare.servers == [ExternalServer(name: "mcp-server-fetch", kind: .stdio, command: "uvx", args: ["mcp-server-fetch"])])
+}
+
+@Test func emptyAndGarbageYieldNothing() {
+    #expect(SmartPasteParser.parse("").servers.isEmpty)
+    #expect(SmartPasteParser.parse("{not json").servers.isEmpty)
+    #expect(SmartPasteParser.parse("{not json").summary == "Couldn't parse that JSON")
+    #expect(SmartPasteParser.parse("   ").summary == "")
+}
