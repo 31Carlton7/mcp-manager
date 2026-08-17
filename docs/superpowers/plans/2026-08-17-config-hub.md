@@ -2371,6 +2371,22 @@ signal(SIGINT) { _ in exit(0) }
 RunLoop.main.run()
 ```
 
+- [ ] **Step 2b: Single-instance guard**
+
+Before starting the control server, `main.swift` must refuse to run if another `mcpmd` already owns the socket (otherwise `ControlServer.start()` would unlink the live daemon's socket). Add to `Sources/mcpmd/main.swift` before `server.start()`:
+```swift
+// If something answers on the socket, another mcpmd is running — bail out instead of stealing it.
+if FileManager.default.fileExists(atPath: paths.socket.path) {
+    let probe = ControlClient(socketPath: paths.socket.path)
+    if (try? await probe.connect()) != nil {
+        await probe.close()
+        log.error("another mcpmd is already listening on \(paths.socket.path); exiting")
+        exit(1)
+    }
+}
+```
+(A stale socket file with no listener fails to connect → we proceed and `ControlServer.start()` removes it.)
+
 - [ ] **Step 3: Build and smoke test**
 
 Run: `swift build 2>&1 | tail -2` → `Build complete`.
@@ -2474,7 +2490,8 @@ final class DaemonClient {
                     return
                 }
                 if case .status(let s) = try await client.send(.subscribe) { status = s }
-                for await ev in client.events {
+                // events() is per-connection and finishes when the socket drops → loop ends → reconnect
+                for await ev in await client.events() {
                     if case .status(let s) = ev { status = s }
                 }
                 connection = .disconnected("Lost connection")
