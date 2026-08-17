@@ -2772,3 +2772,18 @@ Append a "Smoke test 2026-MM-DD" section to `docs/superpowers/plans/2026-08-17-c
 
 - §5 data model → Task 2. §6 adapters (four, preserving unrelated keys) → Tasks 4–6. §7 sync rules incl. suppression, backups, unhealthy skip → Tasks 7, 8, 10. §4.3 control API subset (`hello, status, subscribe, servers.*, clients.*`) → Tasks 11–13; `auth.*`, `catalog.*`, `settings.*`, `daemon.restart` deliberately deferred to Plans 2–3. §9.1 popover and §9.2 Servers tab (table + matrix + add/remove) → Task 15; inspector editing, Test connection, and other tabs deferred to Plan 3. LaunchAgent install, signing, cask → Plan 3; during Plan 1 the daemon is run manually.
 - Type names checked: `SyncInput/SyncOutput`, `ClientHealth`, `ControlResult.hello(daemonVersion:apiVersion:)`, `JSONEncoder.mcpmWire`, `Server.isEnabled(for:)`, `AllAdapters.make()` are used consistently across tasks.
+
+## Smoke test 2026-08-17 (Task 16, real machine)
+
+Run with `.build/debug/mcpmd` (debug binary, not yet a LaunchAgent) against the real home, after byte-for-byte backups in `~/mcpm-manual-backup/`.
+
+| Check | Result |
+|---|---|
+| Initial import | ✅ 8 servers adopted (2 Claude Code, 2 Codex, 5 Cursor; `mobbin` matched across Claude Code + Cursor by name). `~/.mcpm/servers.json` 0600, socket 0600. |
+| No writes on import | ✅ All four client files byte-identical after startup (Codex idempotency holds on the real 130-line TOML). |
+| Toggle on/off via socket (`claudestory` → Cursor) | ✅ Server appears in `~/.cursor/mcp.json`, then removed; two backups under `~/.mcpm/backups/cursor/`. Residual diff vs original is the accepted normalization: empty `headers: {}` and Cursor's redundant `type` key dropped, sorted-key formatting; `nia` env (API key) preserved. |
+| CLI edit respected | ✅ `claude mcp add --scope user smoke-test -- echo hi` adopted within ~2 s (`imported:claude-code`); `claude mcp remove` → `clients.claude-code = false`; `~/.claude.json` content identical to backup afterwards. |
+| App connects at launch | ✅ `MCPManager.app` holds an open Unix-socket connection to the daemon immediately after `open` (verified via `lsof`), popover not yet opened. |
+| Visual checks (icon tint/badge, popover height, table matrix, toggle feel) | ⏳ Needs a human — this session cannot see the screen. |
+
+Not exercised: LaunchAgent install (Plan 3), gateway/OAuth (Plan 2).
