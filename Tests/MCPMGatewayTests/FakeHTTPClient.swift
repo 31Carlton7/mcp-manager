@@ -35,6 +35,15 @@ final class FakeHTTPClient: HTTPClient, @unchecked Sendable {
         stubs[url, default: []].append(Stub(status: status, body: Data(json.utf8)))
     }
 
+    /// Discards whatever a URL was going to answer and installs one new response. Tests that run in
+    /// phases — sign in, then refresh against the same token endpoint — need this, because the last
+    /// queued stub otherwise repeats forever.
+    func restub(_ url: String, status: Int = 200, json: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        stubs[url] = [Stub(status: status, body: Data(json.utf8))]
+    }
+
     var requests: [URLRequest] {
         lock.lock()
         defer { lock.unlock() }
