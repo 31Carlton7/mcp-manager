@@ -1,0 +1,32 @@
+name: MCPManager
+options:
+  bundleIdPrefix: co.charmtechnologies
+  deploymentTarget:
+    macOS: "26.0"
+  xcodeVersion: "26.0"
+packages:
+  MCPM:
+    path: ../..
+targets:
+  MCPManager:
+    type: application
+    platform: macOS
+    sources: [Sources]
+    dependencies:
+      - package: MCPM
+        product: MCPMCore
+      - package: MCPM
+        product: MCPMControl
+    info:
+      path: Sources/Info.plist
+      properties:
+        CFBundleDisplayName: MCP Manager
+        LSUIElement: true
+        NSHumanReadableCopyright: ""
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: co.charmtechnologies.mcpmanager
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: complete
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_STYLE: Automatic
