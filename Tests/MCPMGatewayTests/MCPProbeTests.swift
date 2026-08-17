@@ -7,11 +7,12 @@ import NIOCore
 
 // MARK: - The fake remote MCP server
 
-/// The two ways a Streamable-HTTP server may answer a POST: a plain JSON body, or a one-event
-/// stream. The probe has to read both.
+/// The ways a Streamable-HTTP server may answer a POST: a plain JSON body, a one-event stream, or
+/// a stream that carries the answer and then stays open. The probe has to read all three.
 private enum Wire {
     case json
     case sse
+    case sseHeldOpen
 }
 
 /// What the fake server was asked, in order — the probe's side of the handshake is only really
@@ -45,13 +46,14 @@ private func probeResult(for rpcMethod: String?, params: [String: Any]) -> [Stri
     }
 }
 
-private func probeRouter(wire: Wire, status: HTTPResponse.Status,
+private func probeRouter(wire: Wire, status: HTTPResponse.Status, delay: Duration,
                          recorder: Recorder) -> Router<BasicRequestContext> {
     let router = Router()
     let apiKeyName = HTTPField.Name("X-Api-Key")!
 
     router.post("/mcp") { request, _ in
         let buffer = try await request.body.collect(upTo: 1024 * 1024)
+        if delay > .zero { try await Task.sleep(for: delay) }
         let message = (try? JSONSerialization.jsonObject(with: Data(buffer.readableBytesView)))
             as? [String: Any]
         let rpcMethod = message?["method"] as? String
@@ -87,6 +89,19 @@ private func probeRouter(wire: Wire, status: HTTPResponse.Status,
             // first line would fail here.
             let event = ": keep-alive\n\nevent: message\ndata: \(String(decoding: data, as: UTF8.self))\n\n"
             return Response(status: .ok, headers: headers, body: .init(byteBuffer: ByteBuffer(string: event)))
+        case .sseHeldOpen:
+            headers[.contentType] = "text/event-stream"
+            let event = "event: message\ndata: \(String(decoding: data, as: UTF8.self))\n\n"
+            // The answer, and then a stream that goes on well past it — which is allowed, and
+            // which a probe that waits for the end of the body would sit through three times.
+            return Response(status: .ok, headers: headers, body: .init(contentLength: nil) { writer in
+                try await writer.write(ByteBuffer(string: event))
+                for _ in 0..<12 {
+                    try await Task.sleep(for: .milliseconds(250))
+                    try await writer.write(ByteBuffer(string: ": keep-alive\n\n"))
+                }
+                try await writer.finish(nil)
+            })
         }
     }
 
@@ -102,10 +117,11 @@ private func probeRouter(wire: Wire, status: HTTPResponse.Status,
 
 /// Runs the fake on an ephemeral loopback port for the duration of one test.
 private func withRemoteServer(wire: Wire = .json, status: HTTPResponse.Status = .ok,
+                              delay: Duration = .zero,
                               _ body: (URL, Recorder) async throws -> Void) async throws {
     let recorder = Recorder()
     let server = TestHTTPServer()
-    try await server.start(probeRouter(wire: wire, status: status, recorder: recorder))
+    try await server.start(probeRouter(wire: wire, status: status, delay: delay, recorder: recorder))
     let url = await server.baseURL.appendingPathComponent("mcp")
     do {
         try await body(url, recorder)
@@ -171,6 +187,35 @@ func aRejectedProbeAsksForASignIn(status: HTTPResponse.Status) async throws {
         let result = await MCPProbe.remote(url: url)
         #expect(!result.ok)
         #expect(result.error == "HTTP 500")
+    }
+}
+
+@Test func aStreamThatStaysOpenAfterAnsweringDoesNotHoldTheProbe() async throws {
+    try await withRemoteServer(wire: .sseHeldOpen) { url, _ in
+        let started = ContinuousClock.now
+        let result = await MCPProbe.remote(url: url, timeout: .seconds(10))
+        let elapsed = ContinuousClock.now - started
+
+        #expect(result.ok)
+        #expect(result.toolCount == 3)
+        // Three requests against a stream that runs for three seconds each: reading to the end
+        // would blow the ten-second deadline, never mind this one.
+        #expect(elapsed < .seconds(3))
+    }
+}
+
+@Test func aSlowRemoteServerIsGivenUpOnAtTheOverallDeadlineWithWhatItAlreadySaid() async throws {
+    // Every answer costs 700ms, so the handshake fits inside a one-second deadline and the
+    // tools/list that follows it cannot. The timeout covers the exchange, not each request in it.
+    try await withRemoteServer(delay: .milliseconds(700)) { url, _ in
+        let started = ContinuousClock.now
+        let result = await MCPProbe.remote(url: url, timeout: .seconds(1))
+        let elapsed = ContinuousClock.now - started
+
+        #expect(result.ok)
+        #expect(result.serverName == "fake-remote")
+        #expect(result.toolCount == nil)
+        #expect(elapsed < .milliseconds(1500))
     }
 }
 
@@ -249,6 +294,100 @@ private func fixtureScript() throws -> String {
     #expect(result.ok)
     #expect(result.serverName == "from-env")
     #expect(result.toolCount == nil)
+}
+
+@Test func aServerThatAnswersAndExitsAtOnceIsStillIdentified() async {
+    // The dangerous shape: by the time the probe writes the notification and tools/list, nothing
+    // is holding the read end of stdin. That write must not raise SIGPIPE on this process.
+    let script = """
+        import json, sys
+        sys.stdin.readline()
+        print(json.dumps({"jsonrpc": "2.0", "id": 1, "result": {
+            "protocolVersion": "2025-06-18",
+            "serverInfo": {"name": "quitter", "version": "1"}}}), flush=True)
+        sys.exit(0)
+        """
+    let result = await MCPProbe.stdio(command: "python3", args: ["-c", script], env: [:],
+                                      timeout: .seconds(5))
+
+    #expect(result.ok)
+    #expect(result.serverName == "quitter")
+    #expect(result.toolCount == nil)
+    #expect(result.error == nil)
+}
+
+@Test func aServerThatOnlyLogsIsATimeoutRatherThanItsLogLine() async {
+    let script = """
+        import sys, time
+        sys.stderr.write("INFO starting\\n")
+        sys.stderr.flush()
+        time.sleep(30)
+        """
+    let started = ContinuousClock.now
+    let result = await MCPProbe.stdio(command: "python3", args: ["-c", script], env: [:],
+                                      timeout: .seconds(1))
+    let elapsed = ContinuousClock.now - started
+
+    #expect(!result.ok)
+    #expect(result.error?.contains("timed out") == true)
+    // A live server's chatter is not a diagnosis: stderr only speaks for a server that died.
+    #expect(result.error?.contains("INFO") == false)
+    #expect(elapsed < .seconds(6))
+}
+
+@Test func aServerThatFillsItsErrorPipeBeforeAnsweringIsNotBlockedByIt() async {
+    // ~240 KiB, several times the pipe buffer. A probe that does not drain stderr leaves the
+    // child blocked on this write, and never gets an answer at all.
+    let script = """
+        import json, sys
+        sys.stderr.write("noise\\n" * 40000)
+        sys.stderr.flush()
+        sys.stdin.readline()
+        print(json.dumps({"jsonrpc": "2.0", "id": 1, "result": {
+            "protocolVersion": "2025-06-18",
+            "serverInfo": {"name": "chatty", "version": "1"}}}), flush=True)
+        sys.exit(0)
+        """
+    let result = await MCPProbe.stdio(command: "python3", args: ["-c", script], env: [:],
+                                      timeout: .seconds(5))
+
+    #expect(result.ok)
+    #expect(result.serverName == "chatty")
+}
+
+@Test func anInitializeErrorIsReportedEvenWhenTheServerCannotEchoTheId() async {
+    // `"id": null` is what a server sends when it fails before it has parsed the request. The
+    // error message it carries beats both the stderr line and the exit status that follow it.
+    let script = """
+        import json, sys
+        sys.stdin.readline()
+        print(json.dumps({"jsonrpc": "2.0", "id": None,
+                          "error": {"code": -32600, "message": "missing API key"}}), flush=True)
+        sys.stderr.write("Traceback (most recent call last)\\n")
+        sys.exit(1)
+        """
+    let result = await MCPProbe.stdio(command: "python3", args: ["-c", script], env: [:],
+                                      timeout: .seconds(5))
+
+    #expect(!result.ok)
+    #expect(result.error == "missing API key")
+    #expect(result.toolCount == nil)
+}
+
+// MARK: - Wire formats
+
+@Test func anEventSpreadOverSeveralDataLinesIsStitchedBackTogether() throws {
+    // The SSE spec joins the `data:` lines of one event with newlines; a server is free to break
+    // a long JSON-RPC answer across them.
+    let body = """
+        event: message
+        data: {"jsonrpc":"2.0","id":2,
+        data:  "result":{"tools":[{"name":"a"},{"name":"b"}]}}
+
+        """
+    let obj = try #require(MCPProbe.responseObject(id: 2, in: Data(body.utf8),
+                                                   contentType: "text/event-stream"))
+    #expect(MCPProbe.toolCount(from: obj) == 2)
 }
 
 // MARK: - The result the daemon sends on
