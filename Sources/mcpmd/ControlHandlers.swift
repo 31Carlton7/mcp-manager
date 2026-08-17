@@ -56,14 +56,20 @@ struct Handlers: Sendable {
             }
             return .ack
         case .updateServer(let p):
+            try requireNoAuth(p.auth)
             try await coord.mutate { lib in
                 guard let i = lib.servers.firstIndex(where: { $0.id == p.id }) else { throw HandlerError.notFound(p.id) }
-                if let v = p.name { lib.servers[i].name = v }
-                if let v = p.command { lib.servers[i].command = v }
-                if let v = p.args { lib.servers[i].args = v }
-                if let v = p.env { lib.servers[i].env = v }
-                if let v = p.url { lib.servers[i].url = v }
-                if let v = p.auth { lib.servers[i].auth = v }
+                // Validate the patched copy before it goes into the library: a half-applied
+                // patch would sync an unusable server out to every client that has it on.
+                var patched = lib.servers[i]
+                if let v = p.name { patched.name = v }
+                if let v = p.command { patched.command = v }
+                if let v = p.args { patched.args = v }
+                if let v = p.env { patched.env = v }
+                if let v = p.url { patched.url = v }
+                if let v = p.auth { patched.auth = v }
+                try validate(name: patched.name, kind: patched.kind, command: patched.command, url: patched.url)
+                lib.servers[i] = patched
             }
             return .ack
         case .removeServer(let p):
@@ -94,18 +100,27 @@ struct Handlers: Sendable {
     /// A server the clients can't act on is worse than no server: it lands in every config file
     /// they own before anyone notices it was never going to start.
     private func validate(_ p: AddServerParams) throws {
-        guard !p.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw HandlerError.invalid("name is required")
+        try requireNoAuth(p.auth)
+        try validate(name: p.name, kind: p.kind, command: p.command, url: p.url)
+    }
+
+    private func validate(name: String, kind: ServerKind, command: String?, url: String?) throws {
+        func filled(_ s: String?) -> Bool {
+            !(s ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
-        switch p.kind {
+        guard filled(name) else { throw HandlerError.invalid("name is required") }
+        switch kind {
         case .stdio:
-            guard !(p.command ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                throw HandlerError.invalid("a stdio server needs a command")
-            }
+            guard filled(command) else { throw HandlerError.invalid("a stdio server needs a command") }
         case .remote:
-            guard !(p.url ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                throw HandlerError.invalid("a remote server needs a url")
-            }
+            guard filled(url) else { throw HandlerError.invalid("a remote server needs a url") }
         }
+    }
+
+    /// Authenticated servers route through the local gateway, which does not exist yet (Plan 2).
+    /// Accepting one now would write a URL nothing is listening on into every client config.
+    private func requireNoAuth(_ auth: AuthKind?) throws {
+        guard let auth, auth != .none else { return }
+        throw HandlerError.invalid("OAuth/header auth is not available yet")
     }
 }

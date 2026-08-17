@@ -64,6 +64,23 @@ private let sample = """
     #expect(aWithoutType["headers"] == nil)
 }
 
+@Test func jsonRenderKeepsAnExistingSSETransport() throws {
+    let existing = """
+    {"mcpServers":{"a":{"type":"sse","url":"u"}}}
+    """
+    let out = try JSONMCPServers.render([ExternalServer(name: "a", kind: .remote, url: "u2")],
+                                        over: Data(existing.utf8), writeTypeKey: true)
+    let a = ((try JSONSerialization.jsonObject(with: out) as! [String: Any])["mcpServers"] as! [String: Any])["a"] as! [String: Any]
+    #expect(a["type"] as! String == "sse")
+    #expect(a["url"] as! String == "u2")
+
+    // A flip to stdio is not a transport we can keep, so it resets to the default.
+    let flipped = try JSONMCPServers.render([ExternalServer(name: "a", kind: .stdio, command: "x")],
+                                            over: Data(existing.utf8), writeTypeKey: true)
+    let b = ((try JSONSerialization.jsonObject(with: flipped) as! [String: Any])["mcpServers"] as! [String: Any])["a"] as! [String: Any]
+    #expect(b["type"] as! String == "stdio")
+}
+
 @Test func jsonRenderPreservesUnrecognizedEntries() throws {
     let existing = """
     {"mcpServers":{"weird":{"foo":1}}}

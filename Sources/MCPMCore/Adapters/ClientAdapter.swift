@@ -1,7 +1,13 @@
 import Foundation
 
-public enum AdapterError: Error, Equatable {
+public enum AdapterError: Error, Equatable, CustomStringConvertible {
     case parse(String)
+
+    public var description: String {
+        switch self {
+        case .parse(let msg): msg
+        }
+    }
 }
 
 public protocol ClientAdapter: Sendable {

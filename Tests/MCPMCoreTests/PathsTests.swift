@@ -2,7 +2,8 @@ import Testing
 import Foundation
 @testable import MCPMCore
 
-@Test func homeDirectoryFollowsTheHOMEEnvironment() throws {
+// Mutating $HOME is process-wide, so this cannot run beside anything else that reads it.
+@Test(.serialized) func homeDirectoryFollowsTheHOMEEnvironment() throws {
     let original = ProcessInfo.processInfo.environment["HOME"]
     defer {
         if let original { setenv("HOME", original, 1) } else { unsetenv("HOME") }

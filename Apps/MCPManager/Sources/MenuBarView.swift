@@ -62,6 +62,9 @@ struct MenuBarView: View {
             if let err = daemon.lastError {
                 Text(err).foregroundStyle(.red).font(.caption).lineLimit(3)
             }
+            if let err = daemon.status?.lastError {
+                Text("Background service: \(err)").foregroundStyle(.orange).font(.caption).lineLimit(3)
+            }
         }
         .buttonStyle(.plain)
         .padding(12)

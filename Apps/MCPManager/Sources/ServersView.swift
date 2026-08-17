@@ -26,6 +26,11 @@ struct ServersView: View {
                 if let err = daemon.lastError {
                     Text(err).foregroundStyle(.red).font(.caption).padding(6)
                 }
+                // The daemon's own last failure — a sync or write that went wrong with nobody
+                // watching — as opposed to the command we just sent.
+                if let err = s.lastError {
+                    banner("Background service: \(err)", color: .orange)
+                }
                 unhealthyBanner(s)
             } else if let why = daemon.disconnectReason {
                 ContentUnavailableView("Background service unreachable", systemImage: "powerplug",

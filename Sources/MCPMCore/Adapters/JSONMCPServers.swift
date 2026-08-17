@@ -49,6 +49,7 @@ public enum JSONMCPServers {
         }
         for s in servers {
             var d = existing[s.name] as? [String: Any] ?? [:]
+            let priorType = d["type"] as? String
             // always strip both shapes' keys so a stdio<->remote flip is clean; `type` is re-added below if requested
             for k in ["command", "args", "env", "url", "headers", "type"] { d.removeValue(forKey: k) }
             switch s.kind {
@@ -65,7 +66,10 @@ public enum JSONMCPServers {
                     throw AdapterError.parse("remote server '\(s.name)' has no url")
                 }
                 d["url"] = url
-                if writeTypeKey { d["type"] = "http" }
+                // The library has one `remote` kind but clients distinguish http from sse, so
+                // whichever the file already had survives a rewrite; only a flip to stdio and
+                // back resets it. Otherwise the first write would move an sse server to http.
+                if writeTypeKey { d["type"] = priorType == "sse" ? "sse" : "http" }
                 if !s.headers.isEmpty { d["headers"] = s.headers }
             }
             section[s.name] = d
