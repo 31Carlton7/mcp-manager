@@ -1,9 +1,15 @@
 import Foundation
 
-public enum SyncCoordinatorError: Error, Equatable {
+public enum SyncCoordinatorError: Error, Equatable, CustomStringConvertible {
     /// A mutation was attempted before the library was ever read successfully. Saving now would
     /// overwrite a store we failed to load — usually a corrupt one the user still wants back.
     case notLoaded
+
+    public var description: String {
+        switch self {
+        case .notLoaded: "library not loaded (see lastError)"
+        }
+    }
 }
 
 public struct ClientHealth: Sendable, Equatable {
@@ -30,7 +36,24 @@ public actor SyncCoordinator {
     public private(set) var lastError: String?
     private var watcher: FileWatcher?
     private var watchTask: Task<Void, Never>?
-    private var listeners: [UUID: @Sendable (Library) -> Void] = [:]
+    private var listeners: [UUID: @Sendable (Snapshot) -> Void] = [:]
+
+    /// Everything a subscriber needs, read in one actor hop so the pieces can't disagree.
+    public struct Snapshot: Sendable {
+        public var library: Library
+        /// Health of the clients installed at the time of the read.
+        public var health: [ClientID: ClientHealth]
+        public var lastError: String?
+    }
+
+    /// The parts of health worth telling a subscriber about. `lastSync` is left out on purpose: it
+    /// moves on every pass, so counting it would turn every sync into an event.
+    private struct HealthKey: Equatable {
+        var healthy: Bool
+        var watched: Bool
+        var error: String?
+        init(_ h: ClientHealth) { healthy = h.healthy; watched = h.watched; error = h.error }
+    }
 
     public init(store: Store, adapters: [any ClientAdapter], backups: BackupStore, gatewayPort: Int) {
         self.store = store; self.adapters = adapters; self.backups = backups; self.gatewayPort = gatewayPort
@@ -39,14 +62,23 @@ public actor SyncCoordinator {
     public func currentLibrary() -> Library { library }
     public func lastSyncError() -> String? { lastError }
 
+    public func snapshot() -> Snapshot {
+        Snapshot(library: library, health: clientHealth(), lastError: lastError)
+    }
+
     /// Health of the clients that are installed right now.
     public func clientHealth() -> [ClientID: ClientHealth] {
         let installed = Set(adapters.filter { $0.isInstalled() }.map(\.id))
         return health.filter { installed.contains($0.key) }
     }
 
-    /// Called on any change to the library (after sync). Returns a token to remove later.
-    public func addListener(_ f: @escaping @Sendable (Library) -> Void) -> UUID {
+    /// Drop the "we just wrote this file" window for a client, so the next pass reads it back even
+    /// if the daemon wrote it moments ago. For a re-import the user asked for.
+    public func clearSuppression(for client: ClientID) { suppressedUntil[client] = nil }
+
+    /// Called after a sync that changed the library, a client's health, or the last error. Returns
+    /// a token to remove later.
+    public func addListener(_ f: @escaping @Sendable (Snapshot) -> Void) -> UUID {
         let id = UUID(); listeners[id] = f; return id
     }
     public func removeListener(_ id: UUID) { listeners[id] = nil }
@@ -79,6 +111,8 @@ public actor SyncCoordinator {
     /// about a mutation that the plan itself leaves untouched.
     private func sync(now: Date = .init(), skipPresence: Bool = false,
                       alreadyChanged: Bool = false) throws -> SyncOutput {
+        let healthBefore = health.mapValues(HealthKey.init)
+        let errorBefore = lastError
         lastError = nil
         let unwatched = Set(watcher?.unwatched() ?? [])
         var snapshots: [ClientID: [ExternalServer]] = [:]
@@ -101,7 +135,12 @@ public actor SyncCoordinator {
         let planChanged = out.library != library
         if planChanged {
             library = out.library
-            try store.save(library)
+            do {
+                try store.save(library)
+            } catch {
+                lastError = String(describing: error)
+                throw error
+            }
         }
 
         // A client that can't be written is that client's problem: record it and carry on, since
@@ -127,10 +166,14 @@ public actor SyncCoordinator {
         }
         if !failures.isEmpty { lastError = failures.joined(separator: "; ") }
 
+        // Health and the last error are as much a part of what subscribers show as the library is,
+        // so a pass that only turns a client red still has something to say.
+        let changed = planChanged || alreadyChanged
+            || health.mapValues(HealthKey.init) != healthBefore || lastError != errorBefore
         // Off the actor, so one slow listener can't stall the next sync.
-        if planChanged || alreadyChanged {
-            let lib = library
-            for l in listeners.values { Task { l(lib) } }
+        if changed {
+            let snap = snapshot()
+            for l in listeners.values { Task { l(snap) } }
         }
         return out
     }

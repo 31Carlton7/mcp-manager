@@ -72,7 +72,8 @@ private struct ExplodingAdapter: ClientAdapter {
 
 private actor Counter {
     var count = 0
-    func bump() { count += 1 }
+    var last: SyncCoordinator.Snapshot?
+    func bump(_ snapshot: SyncCoordinator.Snapshot? = nil) { count += 1; last = snapshot }
 }
 
 @Test func coordinatorNotifiesListenersOnlyWhenTheLibraryChanges() async throws {
@@ -89,6 +90,25 @@ private actor Counter {
     try await e.coord.mutate { lib in lib.servers[0].clients[.codex] = true }
     try await Task.sleep(for: .milliseconds(150))
     #expect(await counter.count == 1)
+}
+
+@Test func coordinatorNotifiesWhenOnlyClientHealthChanges() async throws {
+    let e = try makeEnv()
+    try Data(#"{"mcpServers":{"a":{"command":"x"}}}"#.utf8).write(to: e.cursor.configPath)
+    _ = try await e.coord.runOnce()
+    let libraryBefore = try e.store.load()
+
+    let counter = Counter()
+    _ = await e.coord.addListener { snapshot in Task { await counter.bump(snapshot) } }
+    // Nothing about the library changes here — codex simply stops being readable.
+    try Data("this is = not toml [[[".utf8).write(to: e.codex.configPath)
+    _ = try await e.coord.runOnce()
+    try await Task.sleep(for: .milliseconds(150))
+
+    #expect(await counter.count == 1)
+    #expect(await counter.last?.health[.codex]?.healthy == false)
+    #expect(await counter.last?.health[.codex]?.error != nil)
+    #expect(try e.store.load() == libraryBefore)
 }
 
 @Test func coordinatorHealthCoversOnlyInstalledClients() async throws {

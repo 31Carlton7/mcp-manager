@@ -14,7 +14,18 @@ let log = Logger(subsystem: "co.charmtechnologies.mcpmd", category: "main")
 /// assertion and traps. Locals of an async `main()` carry no such isolation.
 @main
 enum MCPMD {
-    static func main() async throws {
+    static func main() async {
+        do {
+            try await run()
+        } catch {
+            // Nothing is listening yet when startup fails, so a trap would leave the user with a
+            // crash report where a log line belongs.
+            log.error("mcpmd failed to start: \(String(describing: error), privacy: .public)")
+            exit(1)
+        }
+    }
+
+    private static func run() async throws {
         let paths = Paths()
         try paths.ensureRoot()
 
@@ -36,6 +47,22 @@ enum MCPMD {
             }
         }
 
+        // Bind before syncing anything: a failure to bind then leaves no trace behind, and an app
+        // that connects during the first pass sees an empty library rather than no daemon.
+        try await server.start()
+        log.info("mcpmd \(daemonVersion, privacy: .public) listening on \(paths.socket.path, privacy: .public)")
+
+        // Every change tickles the stream; one drainer turns those into pushes. Coalescing to the
+        // newest tick keeps a burst of syncs from queueing up a burst of identical statuses, and
+        // the single consumer means an older status can never land after a newer one.
+        let (ticks, tick) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        Task {
+            for await _ in ticks {
+                await server.broadcast(.status(await handlers.status()))
+            }
+        }
+        _ = await coord.addListener { _ in tick.yield() }
+
         // A library we can't read must not keep the daemon off the air: the app reads the failure
         // off `status.lastError` and can offer to sort it out.
         do {
@@ -44,11 +71,6 @@ enum MCPMD {
             log.error("initial sync failed: \(String(describing: error), privacy: .public)")
         }
         await coord.startWatching()
-        _ = await coord.addListener { _ in
-            Task { await server.broadcast(.status(await handlers.status())) }
-        }
-        try await server.start()
-        log.info("mcpmd \(daemonVersion, privacy: .public) listening on \(paths.socket.path, privacy: .public)")
 
         let signalSources = trapSignals(stopping: server)
 

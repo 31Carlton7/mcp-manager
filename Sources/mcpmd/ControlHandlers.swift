@@ -4,24 +4,36 @@ import MCPMControl
 
 let daemonVersion = "0.1.0"
 
-enum HandlerError: Error { case notFound(String) }
+enum HandlerError: Error, CustomStringConvertible {
+    case notFound(String)
+    case invalid(String)
+
+    var description: String {
+        switch self {
+        case .notFound(let id): "no server with id \"\(id)\""
+        case .invalid(let why): why
+        }
+    }
+}
 
 /// Turns control requests into coordinator calls. One instance serves every connection.
 struct Handlers: Sendable {
     let coord: SyncCoordinator
 
     func status() async -> DaemonStatus {
-        let lib = await coord.currentLibrary()
-        let health = await coord.clientHealth()
+        // One read: a status assembled from separate calls could show a library and a health map
+        // from either side of a sync.
+        let snap = await coord.snapshot()
         let clients = await coord.adapters.map { a in
-            ClientStatus(id: a.id, displayName: a.displayName, installed: a.isInstalled(),
-                         configPath: a.configPath.path, healthy: health[a.id]?.healthy ?? true,
-                         watched: health[a.id]?.watched ?? true, error: health[a.id]?.error,
-                         lastSync: health[a.id]?.lastSync)
+            let health = snap.health[a.id]
+            return ClientStatus(id: a.id, displayName: a.displayName, installed: a.isInstalled(),
+                                configPath: a.configPath.path, healthy: health?.healthy ?? true,
+                                watched: health?.watched ?? true, error: health?.error,
+                                lastSync: health?.lastSync)
         }
         return DaemonStatus(daemonVersion: daemonVersion, apiVersion: controlAPIVersion,
-                            servers: lib.servers.map { ServerStatus(server: $0, state: "ok") },
-                            clients: clients, lastError: await coord.lastSyncError())
+                            servers: snap.library.servers.map { ServerStatus(server: $0, state: "ok") },
+                            clients: clients, lastError: snap.lastError)
     }
 
     func handle(_ req: ControlRequest) async throws -> ControlResult {
@@ -35,6 +47,7 @@ struct Handlers: Sendable {
         case .listClients:
             return .clients(await status().clients)
         case .addServer(let p):
+            try validate(p)
             try await coord.mutate { lib in
                 let id = Slug.unique(Slug.make(p.name), existing: Set(lib.servers.map(\.id)))
                 lib.servers.append(Server(id: id, name: p.name, kind: p.kind, command: p.command, args: p.args,
@@ -69,9 +82,30 @@ struct Handlers: Sendable {
                 for c in installed { lib.servers[i].clients[c] = p.enabled }
             }
             return .ack
-        case .reimport:
+        case .reimport(let p):
+            // The suppression window exists to stop our own writes bouncing back at us; a
+            // re-import is the user asking for exactly that file to be read again.
+            await coord.clearSuppression(for: p.client)
             try await coord.runOnce()
             return .ack
+        }
+    }
+
+    /// A server the clients can't act on is worse than no server: it lands in every config file
+    /// they own before anyone notices it was never going to start.
+    private func validate(_ p: AddServerParams) throws {
+        guard !p.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw HandlerError.invalid("name is required")
+        }
+        switch p.kind {
+        case .stdio:
+            guard !(p.command ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw HandlerError.invalid("a stdio server needs a command")
+            }
+        case .remote:
+            guard !(p.url ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw HandlerError.invalid("a remote server needs a url")
+            }
         }
     }
 }
