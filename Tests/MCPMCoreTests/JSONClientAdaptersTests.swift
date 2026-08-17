@@ -59,6 +59,19 @@ private func fixture(_ name: String) throws -> Data {
     #expect(try a.parse(out) == servers)
 }
 
+@Test func claudeDesktopLeavesUnknownMcpRemoteFlagsAsStdio() throws {
+    let a = ClaudeDesktopAdapter(configPath: URL(fileURLWithPath: "/dev/null"))
+    let json = """
+    {"mcpServers":{"x":{"command":"npx","args":["-y","mcp-remote","https://x","--allow-http"]}}}
+    """
+    let data = Data(json.utf8)
+    let parsed = try a.parse(data)
+    #expect(parsed == [ExternalServer(name: "x", kind: .stdio, command: "npx",
+                                       args: ["-y", "mcp-remote", "https://x", "--allow-http"])])
+    let out = try a.render(parsed, over: data)
+    #expect(try a.parse(out) == parsed)
+}
+
 @Test func allAdaptersCoversEveryClientID() {
     #expect(Set(AllAdapters.make().map(\.id)) == Set(ClientID.allCases))
 }

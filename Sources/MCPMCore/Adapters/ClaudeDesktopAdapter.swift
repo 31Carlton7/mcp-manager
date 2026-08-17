@@ -21,13 +21,14 @@ public struct ClaudeDesktopAdapter: ClientAdapter {
             var headers: [String: String] = [:]
             var i = 3
             while i < s.args.count {
-                if s.args[i] == "--header", i + 1 < s.args.count, let range = s.args[i + 1].range(of: ": ") {
-                    let pair = s.args[i + 1]
-                    headers[String(pair[pair.startIndex..<range.lowerBound])] = String(pair[range.upperBound...])
-                    i += 2
-                } else {
-                    i += 1
+                guard s.args[i] == "--header", i + 1 < s.args.count,
+                      let range = s.args[i + 1].range(of: ": ") else {
+                    // unrecognized trailing arg — don't lose it; leave this server as stdio
+                    return s
                 }
+                let pair = s.args[i + 1]
+                headers[String(pair[pair.startIndex..<range.lowerBound])] = String(pair[range.upperBound...])
+                i += 2
             }
             return ExternalServer(name: s.name, kind: .remote, url: url, headers: headers)
         }
