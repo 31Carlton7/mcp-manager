@@ -63,6 +63,62 @@ import MCPMCore
     #expect(round.lastError == "sync failed")
 }
 
+@Test(arguments: [
+    ControlCommand.authStart(.init(id: "notion")),
+    .authSignOut(.init(id: "notion")),
+    .authForget(.init(id: "notion")),
+    .authSetHeader(.init(id: "notion", name: "X-Api-Key", value: "s3cret")),
+    .testServer(.init(id: "notion")),
+])
+func authAndTestCommandsRoundTrip(command: ControlCommand) throws {
+    let data = try JSONEncoder.mcpm.encode(ControlRequest(id: 2, command: command))
+    let obj = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+    #expect(obj["method"] as! String == command.method)
+    #expect(try JSONDecoder.mcpm.decode(ControlRequest.self, from: data).command == command)
+}
+
+@Test func authAndTestMethodNames() {
+    #expect(ControlCommand.authStart(.init(id: "n")).method == "auth.start")
+    #expect(ControlCommand.authSignOut(.init(id: "n")).method == "auth.signOut")
+    #expect(ControlCommand.authForget(.init(id: "n")).method == "auth.forget")
+    #expect(ControlCommand.authSetHeader(.init(id: "n", name: "a", value: "b")).method == "auth.setHeader")
+    #expect(ControlCommand.testServer(.init(id: "n")).method == "servers.test")
+}
+
+@Test func authorizeURLAndTestResultRoundTrip() throws {
+    let url = ControlResult.authorizeURL("https://mcp.notion.com/authorize?client_id=x&state=y")
+    #expect(try JSONDecoder.mcpm.decode(ControlResult.self, from: JSONEncoder.mcpmWire.encode(url)) == url)
+
+    let result = ControlResult.testResult(TestResult(ok: true, serverName: "notion", serverVersion: "1.2",
+                                                     protocolVersion: "2025-06-18", toolCount: 12,
+                                                     durationMs: 340))
+    #expect(try JSONDecoder.mcpm.decode(ControlResult.self, from: JSONEncoder.mcpmWire.encode(result)) == result)
+
+    let failed = TestResult(ok: false, error: "needs sign-in", durationMs: 12)
+    #expect(try JSONDecoder.mcpm.decode(TestResult.self, from: JSONEncoder.mcpmWire.encode(failed)) == failed)
+}
+
+@Test func daemonStatusCarriesGatewayPort() throws {
+    let s = ServerStatus(server: Server(id: "notion", name: "Notion", kind: .remote,
+                                        url: "https://mcp.notion.com/mcp", auth: .oauth,
+                                        source: "manual", createdAt: .init()),
+                         state: "needsAuth")
+    let status = DaemonStatus(daemonVersion: "0.1.0", apiVersion: controlAPIVersion, servers: [s],
+                              clients: [], gatewayPort: 7337)
+    let round = try JSONDecoder.mcpm.decode(DaemonStatus.self, from: JSONEncoder.mcpmWire.encode(status))
+    #expect(round == status)
+    #expect(round.gatewayPort == 7337)
+    #expect(round.servers[0].state == "needsAuth")
+}
+
+/// An app built before the gateway existed sends statuses without the key; a daemon rolled back
+/// to one has to keep decoding them.
+@Test func daemonStatusDecodesWithoutGatewayPort() throws {
+    let json = #"{"daemonVersion":"0.1.0","apiVersion":1,"servers":[],"clients":[]}"#
+    let status = try JSONDecoder.mcpm.decode(DaemonStatus.self, from: Data(json.utf8))
+    #expect(status.gatewayPort == nil)
+}
+
 @Test func addServerParamsDecodesWithoutHeaders() throws {
     let json = #"{"id":9,"method":"servers.add","params":{"name":"notion","kind":"remote","args":[],"env":{},"url":"https://mcp.notion.com/mcp","auth":"none","clients":{"cursor":true}}}"#
     let req = try JSONDecoder.mcpm.decode(ControlRequest.self, from: Data(json.utf8))

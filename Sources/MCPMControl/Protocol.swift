@@ -83,6 +83,15 @@ public struct UpdateServerParams: Codable, Equatable, Sendable {
     }
 }
 
+public struct SetHeaderParams: Codable, Equatable, Sendable {
+    public var id: String
+    public var name: String
+    public var value: String
+    public init(id: String, name: String, value: String) {
+        self.id = id; self.name = name; self.value = value
+    }
+}
+
 public enum ControlCommand: Equatable, Sendable {
     case hello(HelloParams)
     case status
@@ -93,8 +102,13 @@ public enum ControlCommand: Equatable, Sendable {
     case removeServer(IDParams)
     case setClient(SetClientParams)
     case setAll(SetAllParams)
+    case testServer(IDParams)
     case listClients
     case reimport(ClientParams)
+    case authStart(IDParams)
+    case authSignOut(IDParams)
+    case authForget(IDParams)
+    case authSetHeader(SetHeaderParams)
 
     public var method: String {
         switch self {
@@ -107,8 +121,13 @@ public enum ControlCommand: Equatable, Sendable {
         case .removeServer: "servers.remove"
         case .setClient: "servers.setClient"
         case .setAll: "servers.setAll"
+        case .testServer: "servers.test"
         case .listClients: "clients.list"
         case .reimport: "clients.reimport"
+        case .authStart: "auth.start"
+        case .authSignOut: "auth.signOut"
+        case .authForget: "auth.forget"
+        case .authSetHeader: "auth.setHeader"
         }
     }
 }
@@ -134,8 +153,13 @@ public struct ControlRequest: Codable, Equatable, Sendable {
         case "servers.remove": command = .removeServer(try c.decode(IDParams.self, forKey: .params))
         case "servers.setClient": command = .setClient(try c.decode(SetClientParams.self, forKey: .params))
         case "servers.setAll": command = .setAll(try c.decode(SetAllParams.self, forKey: .params))
+        case "servers.test": command = .testServer(try c.decode(IDParams.self, forKey: .params))
         case "clients.list": command = .listClients
         case "clients.reimport": command = .reimport(try c.decode(ClientParams.self, forKey: .params))
+        case "auth.start": command = .authStart(try c.decode(IDParams.self, forKey: .params))
+        case "auth.signOut": command = .authSignOut(try c.decode(IDParams.self, forKey: .params))
+        case "auth.forget": command = .authForget(try c.decode(IDParams.self, forKey: .params))
+        case "auth.setHeader": command = .authSetHeader(try c.decode(SetHeaderParams.self, forKey: .params))
         default:
             throw DecodingError.dataCorruptedError(forKey: .method, in: c, debugDescription: "unknown method \(method)")
         }
@@ -152,7 +176,10 @@ public struct ControlRequest: Codable, Equatable, Sendable {
         case .removeServer(let p): try c.encode(p, forKey: .params)
         case .setClient(let p): try c.encode(p, forKey: .params)
         case .setAll(let p): try c.encode(p, forKey: .params)
+        case .testServer(let p): try c.encode(p, forKey: .params)
         case .reimport(let p): try c.encode(p, forKey: .params)
+        case .authStart(let p), .authSignOut(let p), .authForget(let p): try c.encode(p, forKey: .params)
+        case .authSetHeader(let p): try c.encode(p, forKey: .params)
         case .status, .subscribe, .listServers, .listClients: break
         }
     }
@@ -162,7 +189,9 @@ public struct ControlRequest: Codable, Equatable, Sendable {
 
 public struct ServerStatus: Codable, Equatable, Sendable, Identifiable {
     public var server: Server
-    /// "ok" | "needsAuth" | "expiring" | "connected"  (auth states arrive in Plan 2)
+    /// An `AuthState` raw value: `none` | `needsAuth` | `connected` | `expiring` | `error`. Kept a
+    /// `String` rather than the gateway's enum so this module stays free of that dependency, and so
+    /// a state added later doesn't break an older app's decode.
     public var state: String
     public var id: String { server.id }
     public init(server: Server, state: String) { self.server = server; self.state = state }
@@ -192,10 +221,35 @@ public struct DaemonStatus: Codable, Equatable, Sendable {
     public var clients: [ClientStatus]
     /// Last error from a sync pass, or nil if the last pass succeeded.
     public var lastError: String?
+    /// The port the auth gateway is listening on, or nil when it failed to start — in which case
+    /// authenticated servers cannot be reached and `lastError` says why.
+    public var gatewayPort: Int?
     public init(daemonVersion: String, apiVersion: Int, servers: [ServerStatus], clients: [ClientStatus],
-                lastError: String? = nil) {
+                lastError: String? = nil, gatewayPort: Int? = nil) {
         self.daemonVersion = daemonVersion; self.apiVersion = apiVersion
         self.servers = servers; self.clients = clients; self.lastError = lastError
+        self.gatewayPort = gatewayPort
+    }
+}
+
+/// The outcome of `servers.test`: an MCP `initialize` handshake, plus a `tools/list` when the
+/// server answered one. Mirrors the gateway's `ProbeResult` — the daemon converts — so the app and
+/// the control protocol stay independent of the gateway module.
+public struct TestResult: Codable, Equatable, Sendable {
+    public var ok: Bool
+    public var serverName: String?
+    public var serverVersion: String?
+    public var protocolVersion: String?
+    public var toolCount: Int?
+    public var error: String?
+    public var durationMs: Int
+
+    public init(ok: Bool, serverName: String? = nil, serverVersion: String? = nil,
+                protocolVersion: String? = nil, toolCount: Int? = nil, error: String? = nil,
+                durationMs: Int) {
+        self.ok = ok; self.serverName = serverName; self.serverVersion = serverVersion
+        self.protocolVersion = protocolVersion; self.toolCount = toolCount; self.error = error
+        self.durationMs = durationMs
     }
 }
 
@@ -207,6 +261,10 @@ public enum ControlResult: Codable, Equatable, Sendable {
     case status(DaemonStatus)
     case servers([Server])
     case clients([ClientStatus])
+    /// Where the user's browser has to go to finish a sign-in. The daemon does not open it: the
+    /// app does, so the browser belongs to the logged-in GUI session.
+    case authorizeURL(String)
+    case testResult(TestResult)
 }
 
 public struct ControlResponse: Codable, Equatable, Sendable {
