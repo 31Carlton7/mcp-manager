@@ -39,6 +39,39 @@ final class DaemonClient {
         installed.contains { isEnabled(server, for: $0) }
     }
 
+    // MARK: derived
+
+    /// The only clients the UI ever shows: the ones actually on this Mac.
+    var installedClients: [ClientStatus] { status?.clients.filter(\.installed) ?? [] }
+
+    /// Every server, ordered for display. The filter names the client a row's switch writes to —
+    /// it does not hide servers, because a server that is off everywhere is exactly what the user
+    /// opened the popover to turn on.
+    func servers(filter: ClientID?) -> [ServerStatus] {
+        (status?.servers ?? []).sorted { $0.server.name.localizedStandardCompare($1.server.name) == .orderedAscending }
+    }
+
+    /// Servers switched on in `filter`, or in any installed client when the filter is off.
+    /// Reads through the optimistic overlay so the number moves with the switch the user just flipped.
+    func activeCount(filter: ClientID?) -> Int {
+        let servers = status?.servers ?? []
+        guard let filter else {
+            let installed = installedClients.map(\.id)
+            return servers.count { isEnabledAnywhere($0.server, installed: installed) }
+        }
+        return servers.count { isEnabled($0.server, for: filter) }
+    }
+
+    /// Everything asking for a human: servers waiting on a sign-in, plus clients the daemon can't
+    /// write to.
+    var attentionCount: Int {
+        guard let s = status else { return 0 }
+        return s.servers.count { $0.state == "needsAuth" } + s.clients.count { $0.installed && !$0.healthy }
+    }
+
+    /// The most recent sync across installed clients — the footer's "Synced HH:mm".
+    var lastSynced: Date? { installedClients.compactMap(\.lastSync).max() }
+
     private struct Queued {
         let command: ControlCommand
         /// Overlay entries this command owns, reverted if it fails.
