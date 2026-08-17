@@ -20,7 +20,11 @@ public struct Server: Codable, Equatable, Sendable, Identifiable {
                 clients: [ClientID: Bool] = [:], source: String, createdAt: Date) {
         self.id = id; self.name = name; self.kind = kind; self.command = command; self.args = args
         self.env = env; self.url = url; self.auth = auth; self.clients = clients
-        self.source = source; self.createdAt = createdAt
+        self.source = source
+        // JSONEncoder.mcpm's .iso8601 strategy has whole-second resolution (no fractional
+        // seconds), so normalize here to keep in-memory equality consistent with a save/load
+        // round trip through Store.
+        self.createdAt = Date(timeIntervalSince1970: createdAt.timeIntervalSince1970.rounded(.down))
     }
 
     public func isEnabled(for client: ClientID) -> Bool { clients[client] ?? false }
