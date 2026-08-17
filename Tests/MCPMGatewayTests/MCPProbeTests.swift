@@ -144,7 +144,7 @@ private func withRemoteServer(wire: Wire = .json, status: HTTPResponse.Status = 
         #expect(result.protocolVersion == "2025-06-18")
         #expect(result.toolCount == 3)
         #expect(result.error == nil)
-        #expect(result.durationMs >= 0)
+        #expect(result.durationMs > 0)   // a real round trip took measurable time
 
         let seen = await recorder.seen
         #expect(seen.map(\.rpcMethod) == ["initialize", "notifications/initialized", "tools/list", nil])

@@ -250,8 +250,13 @@ public enum MCPProbe {
     public static func remote(url: URL, headers: [String: String] = [:],
                               timeout: Duration = .seconds(10)) async -> ProbeResult {
         let start = ContinuousClock.now
+        var r = await remoteImpl(url: url, headers: headers, timeout: timeout)
+        r.durationMs = millis(since: start)
+        return r
+    }
+
+    static func remoteImpl(url: URL, headers: [String: String], timeout: Duration) async -> ProbeResult {
         var result = ProbeResult(ok: false, durationMs: 0)
-        defer { result.durationMs = millis(since: start) }
 
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = seconds(timeout)
@@ -388,8 +393,13 @@ public enum MCPProbe {
     public static func stdio(command: String, args: [String], env: [String: String],
                              timeout: Duration = .seconds(10)) async -> ProbeResult {
         let start = ContinuousClock.now
+        var r = await stdioImpl(command: command, args: args, env: env, timeout: timeout)
+        r.durationMs = millis(since: start)
+        return r
+    }
+
+    static func stdioImpl(command: String, args: [String], env: [String: String], timeout: Duration) async -> ProbeResult {
         var result = ProbeResult(ok: false, durationMs: 0)
-        defer { result.durationMs = millis(since: start) }
 
         guard let exe = resolveExecutable(command, path: env["PATH"]) else {
             result.error = "command not found: \(command)"
