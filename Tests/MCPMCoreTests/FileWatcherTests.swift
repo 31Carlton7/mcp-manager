@@ -28,3 +28,20 @@ import Foundation
     let events = await collector.value
     #expect(events == [.cursor, .cursor])
 }
+
+@Test func watcherReArmsWithoutAccumulatingSources() async throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("mcpm-w-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let file = dir.appendingPathComponent("mcp.json")
+
+    let watcher = FileWatcher(paths: [.cursor: file], debounce: .milliseconds(50))
+    _ = watcher.start()
+    defer { watcher.stop() }
+
+    // Every atomic replace swaps the inode, so the per-file source has to be re-armed each time.
+    for i in 0..<4 {
+        try Data("v\(i)".utf8).write(to: file, options: .atomic)
+        try await Task.sleep(for: .milliseconds(150))
+    }
+    #expect(watcher.sourceCount == 2)   // one directory source + one file source
+}
