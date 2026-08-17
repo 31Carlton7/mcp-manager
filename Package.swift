@@ -47,7 +47,7 @@ let package = Package(
             .product(name: "NIOCore", package: "swift-nio"),
             .product(name: "Logging", package: "swift-log"),
             .product(name: "ServiceLifecycle", package: "swift-service-lifecycle"),
-        ]),
+        ], resources: [.copy("Fixtures")]),
     ],
     swiftLanguageModes: [.v6]
 )
