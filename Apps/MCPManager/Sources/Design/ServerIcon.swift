@@ -31,16 +31,21 @@ struct ServerIcon: View {
         case .monogram(let text, let hue):
             monogramTile(text, hue: hue)
         case .favicon(let hosts):
-            monogramTile(IconSource.monogram(for: server.name), hue: IconSource.hue(server.name))
-                .overlay {
-                    if let favicon {
-                        Image(nsImage: favicon)
-                            .resizable()
-                            .interpolation(.high)
-                            .aspectRatio(contentMode: .fill)
-                            .clipShape(shape)
-                    }
+            // Once a real favicon is loaded it fully replaces the tinted tile — no background
+            // square behind transparent icons. The rounded clip stays so square artwork still
+            // gets radii; the tile remains only while we have nothing but a monogram.
+            ZStack {
+                if let favicon {
+                    Image(nsImage: favicon)
+                        .resizable()
+                        .interpolation(.high)
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: size, height: size)
+                        .clipShape(shape)
+                } else {
+                    monogramTile(IconSource.monogram(for: server.name), hue: IconSource.hue(server.name))
                 }
+            }
                 .animation(.easeOut(duration: 0.18), value: favicon != nil)
                 .task(id: hosts) {
                     guard let data = await FaviconCache.shared.iconData(for: hosts) else { return }
