@@ -13,6 +13,7 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.70.0"),
         .package(url: "https://github.com/apple/swift-nio-extras.git", from: "1.24.0"),
         .package(url: "https://github.com/LebJe/TOMLKit.git", from: "0.6.0"),
+        .package(url: "https://github.com/hummingbird-project/hummingbird.git", from: "2.5.0"),
     ],
     targets: [
         .target(name: "MCPMCore", dependencies: [.product(name: "TOMLKit", package: "TOMLKit")]),
@@ -22,9 +23,17 @@ let package = Package(
             .product(name: "NIOConcurrencyHelpers", package: "swift-nio"),
             .product(name: "NIOExtras", package: "swift-nio-extras"),
         ]),
-        .executableTarget(name: "mcpmd", dependencies: ["MCPMCore", "MCPMControl"]),
+        .target(name: "MCPMGateway", dependencies: [
+            "MCPMCore",
+            .product(name: "Hummingbird", package: "hummingbird"),
+        ]),
+        .executableTarget(name: "mcpmd", dependencies: ["MCPMCore", "MCPMControl", "MCPMGateway"]),
         .testTarget(name: "MCPMCoreTests", dependencies: ["MCPMCore"], resources: [.copy("Fixtures")]),
         .testTarget(name: "MCPMControlTests", dependencies: ["MCPMControl"]),
+        .testTarget(name: "MCPMGatewayTests", dependencies: [
+            "MCPMGateway",
+            .product(name: "HummingbirdTesting", package: "hummingbird"),
+        ]),
     ],
     swiftLanguageModes: [.v6]
 )
