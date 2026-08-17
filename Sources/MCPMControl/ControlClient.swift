@@ -54,8 +54,9 @@ public actor ControlClient {
     public func close() async {
         let old = channel
         channel = nil
-        try? await old?.close().get()
+        // State first: awaiting the close lets other calls in on a connection we already gave up on.
         endConnection()
+        try? await old?.close().get()
     }
 
     public func send(_ command: ControlCommand) async throws -> ControlResult {
