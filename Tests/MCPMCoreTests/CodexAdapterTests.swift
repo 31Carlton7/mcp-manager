@@ -88,6 +88,69 @@ private func fixture(_ name: String) throws -> Data {
     #expect(Set(try a.parse(Data(out.utf8))) == Set(desired))
 }
 
+@Test func codexEditPreservesUnmodeledKeys() throws {
+    let a = CodexAdapter(configPath: URL(fileURLWithPath: "/dev/null"))
+    let orig = try fixture("codex-config.toml")
+    var desired = try a.parse(orig)
+    let i = desired.firstIndex { $0.name == "node_repl" }!
+    desired[i].command = "/usr/local/bin/node_repl"
+    let out = String(decoding: try a.render(desired, over: orig), as: UTF8.self)
+    #expect(out.contains("startup_timeout_sec = 120"))                  // unmodeled key survives the edit
+    #expect(out.contains("command = \"/usr/local/bin/node_repl\""))
+    #expect(!out.contains("cua_node/bin/node_repl\""))                  // old command gone
+    #expect(out.components(separatedBy: "[mcp_servers.node_repl.env]").count - 1 == 1)
+    #expect(out.contains("NODE_REPL_NODE_PATH = \"/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node\""))
+    #expect(out.contains("cwd = \".\""))                                // computer-use untouched, still verbatim
+    #expect(out.contains("enabled = false"))
+    #expect(Set(try a.parse(Data(out.utf8))) == Set(desired))
+}
+
+@Test func codexEditDropsMultiLineModeledValuesWhole() throws {
+    let a = CodexAdapter(configPath: URL(fileURLWithPath: "/dev/null"))
+    let toml = """
+    [mcp_servers.x]
+    # keep me
+    command = "old"
+    args = [
+      "a",
+      "b",
+    ]
+    startup_timeout_sec = 5
+    """
+    let desired = [ExternalServer(name: "x", kind: .stdio, command: "new", args: ["c"])]
+    let out = String(decoding: try a.render(desired, over: Data(toml.utf8)), as: UTF8.self)
+    #expect(out.contains("# keep me"))
+    #expect(out.contains("startup_timeout_sec = 5"))
+    #expect(!out.contains("\"a\""))                                     // no orphaned array elements
+    #expect(try a.parse(Data(out.utf8)) == desired)
+}
+
+@Test func codexRemoteHeadersRoundTrip() throws {
+    let a = CodexAdapter(configPath: URL(fileURLWithPath: "/dev/null"))
+    let s = ExternalServer(name: "exa", kind: .remote, url: "https://mcp.exa.ai/mcp",
+                           headers: ["Authorization": "Bearer x", "X-Trace": "1"])
+    let out = String(decoding: try a.render([s], over: nil), as: UTF8.self)
+    #expect(out.contains("http_headers = { \"Authorization\" = \"Bearer x\", \"X-Trace\" = \"1\" }"))
+    #expect(try a.parse(Data(out.utf8)) == [s])
+
+    let subTable = """
+    [mcp_servers.exa]
+    url = "https://mcp.exa.ai/mcp"
+
+    [mcp_servers.exa.http_headers]
+    Authorization = "Bearer x"
+    """
+    #expect(try a.parse(Data(subTable.utf8)) == [
+        ExternalServer(name: "exa", kind: .remote, url: "https://mcp.exa.ai/mcp", headers: ["Authorization": "Bearer x"])
+    ])
+
+    // editing a server whose headers lived in a sub-table must not leave a duplicate definition
+    let edited = [ExternalServer(name: "exa", kind: .remote, url: "https://mcp.exa.ai/mcp", headers: ["X-Trace": "2"])]
+    let out2 = String(decoding: try a.render(edited, over: Data(subTable.utf8)), as: UTF8.self)
+    #expect(!out2.contains("[mcp_servers.exa.http_headers]"))
+    #expect(try a.parse(Data(out2.utf8)) == edited)
+}
+
 @Test func codexRenderQuotesNonBareNamesAndDropsAllWhenEmpty() throws {
     let a = CodexAdapter(configPath: URL(fileURLWithPath: "/dev/null"))
     let out = String(decoding: try a.render([ExternalServer(name: "my server", kind: .remote, url: "https://x/mcp")], over: nil), as: UTF8.self)

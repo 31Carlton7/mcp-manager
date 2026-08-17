@@ -28,7 +28,9 @@ public struct CodexAdapter: ClientAdapter {
         for (name, value) in servers {
             guard let t = value.table else { continue }
             if let url = t["url"]?.string {
-                out.append(ExternalServer(name: name, kind: .remote, url: url))
+                var headers: [String: String] = [:]
+                if let h = t["http_headers"]?.table { for (k, v) in h { if let s = v.string { headers[k] = s } } }
+                out.append(ExternalServer(name: name, kind: .remote, url: url, headers: headers))
             } else if let command = t["command"]?.string {
                 let args = t["args"]?.array?.compactMap { $0.string } ?? []
                 var env: [String: String] = [:]
@@ -80,11 +82,15 @@ public struct CodexAdapter: ClientAdapter {
         }
         flush()
 
-        // 2. keep untouched blocks verbatim, regenerate changed/new ones, drop removed
+        // 2. untouched blocks stay verbatim, edited ones keep their unmodeled keys, new ones are generated
         var rendered: [String] = []
         for s in servers.sorted(by: { $0.name < $1.name }) {
-            if let old = existingByName[s.name], old == s, let b = blocks[s.name] {
-                rendered.append(contentsOf: Self.trimmed(b.lines))
+            if let b = blocks[s.name] {
+                if let old = existingByName[s.name], old == s {
+                    rendered.append(contentsOf: Self.trimmed(b.lines))
+                } else {
+                    rendered.append(contentsOf: Self.renderBlock(s, over: b.lines))
+                }
             } else {
                 rendered.append(contentsOf: Self.renderBlock(s))
             }
@@ -115,21 +121,127 @@ public struct CodexAdapter: ClientAdapter {
         return key
     }
 
+    /// Keys this adapter owns: they are rewritten from `ExternalServer`, so old copies are dropped on edit.
+    static let modeledKeys: Set<String> = ["command", "args", "env", "url", "http_headers"]
+
+    /// A whole block for a server we have no previous text for.
     static func renderBlock(_ s: ExternalServer) -> [String] {
+        shapeLines(s) + envLines(s)
+    }
+
+    /// A block for a server whose shape changed: our keys, then every line of the old block we don't own.
+    static func renderBlock(_ s: ExternalServer, over old: [String]) -> [String] {
+        let kept = preserved(old)
+        var lines = shapeLines(s)
+        lines += kept.keys
+        if !kept.subTables.isEmpty {
+            lines.append("")
+            lines += kept.subTables
+        }
+        return lines + envLines(s)
+    }
+
+    /// Header plus the keys we model, minus `env` (which is written as a sub-table).
+    static func shapeLines(_ s: ExternalServer) -> [String] {
         var lines = ["[mcp_servers.\(key(s.name))]"]
         switch s.kind {
         case .remote:
             lines.append("url = \(str(s.url ?? ""))")
+            if !s.headers.isEmpty {
+                let pairs = s.headers.keys.sorted().map { "\(str($0)) = \(str(s.headers[$0]!))" }
+                lines.append("http_headers = { \(pairs.joined(separator: ", ")) }")
+            }
         case .stdio:
             lines.append("command = \(str(s.command ?? ""))")
             lines.append("args = [\(s.args.map(str).joined(separator: ", "))]")
-            if !s.env.isEmpty {
-                lines.append("")
-                lines.append("[mcp_servers.\(key(s.name)).env]")
-                for k in s.env.keys.sorted() { lines.append("\(key(k)) = \(str(s.env[k]!))") }
-            }
         }
         return lines
+    }
+
+    static func envLines(_ s: ExternalServer) -> [String] {
+        guard s.kind == .stdio, !s.env.isEmpty else { return [] }
+        var lines = ["", "[mcp_servers.\(key(s.name)).env]"]
+        for k in s.env.keys.sorted() { lines.append("\(key(k)) = \(str(s.env[k]!))") }
+        return lines
+    }
+
+    /// Splits an old block into the lines we must not lose: key lines of the main table (minus `modeledKeys`)
+    /// and whole sub-tables other than the ones we rewrite (`.env`, `.http_headers`).
+    static func preserved(_ lines: [String]) -> (keys: [String], subTables: [String]) {
+        enum Region { case main, dropSub, keepSub }
+        var region = Region.main
+        var keys: [String] = []
+        var subTables: [String] = []
+        var dropDepth = 0
+        for line in lines {
+            if let sub = headerSubPath(line) {
+                dropDepth = 0
+                switch sub {
+                case "": region = .main                                 // the block header itself
+                case "env", "http_headers": region = .dropSub
+                default: region = .keepSub; subTables.append(line)
+                }
+                continue
+            }
+            switch region {
+            case .main:
+                if dropDepth > 0 {                                      // continuation of a dropped value
+                    dropDepth = openDepth(line, from: dropDepth)
+                } else if let k = topLevelKey(of: line), modeledKeys.contains(k) {
+                    dropDepth = openDepth(line, from: 0)
+                } else {
+                    keys.append(line)
+                }
+            case .dropSub: continue
+            case .keepSub: subTables.append(line)
+            }
+        }
+        return (trimmed(keys), trimmed(subTables))
+    }
+
+    /// `[mcp_servers.foo]` → "", `[mcp_servers.foo.env]` → "env"; `nil` if not an `mcp_servers` header.
+    static func headerSubPath(_ line: String) -> String? {
+        let t = line.trimmingCharacters(in: .whitespaces)
+        guard t.hasPrefix("[mcp_servers."), let close = t.firstIndex(of: "]") else { return nil }
+        var rest = String(t[t.index(t.startIndex, offsetBy: "[mcp_servers.".count)..<close])
+        if rest.hasPrefix("\"") {
+            guard let end = rest.dropFirst().firstIndex(of: "\"") else { return nil }
+            rest = String(rest[rest.index(after: end)...])
+        } else if let dot = rest.firstIndex(of: ".") {
+            rest = String(rest[dot...])
+        } else {
+            rest = ""
+        }
+        return rest.hasPrefix(".") ? String(rest.dropFirst()) : rest
+    }
+
+    /// The key of a `key = value` line, unquoted; `nil` for comments, blanks and anything else.
+    static func topLevelKey(of line: String) -> String? {
+        let t = line.trimmingCharacters(in: .whitespaces)
+        guard !t.hasPrefix("#"), let eq = t.firstIndex(of: "=") else { return nil }
+        var k = String(t[..<eq]).trimmingCharacters(in: .whitespaces)
+        if k.count >= 2, k.hasPrefix("\""), k.hasSuffix("\"") { k = String(k.dropFirst().dropLast()) }
+        return k.isEmpty ? nil : k
+    }
+
+    /// Bracket/brace nesting left open at the end of `line`, so multi-line values are dropped whole.
+    static func openDepth(_ line: String, from start: Int) -> Int {
+        var depth = start, inString = false, escaped = false
+        for c in line {
+            if escaped { escaped = false; continue }
+            if inString {
+                if c == "\\" { escaped = true } else if c == "\"" { inString = false }
+                continue
+            }
+            switch c {
+            case "\"": inString = true
+            case "[", "{": depth += 1
+            case "]", "}": depth = max(0, depth - 1)
+            case "#": return depth                                      // comment runs to end of line
+            default: break
+            }
+        }
+        return depth
     }
 
     static func key(_ k: String) -> String {
