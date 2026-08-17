@@ -1219,7 +1219,8 @@ private func srv(_ id: String, kind: ServerKind = .stdio, auth: AuthKind = .none
 
 @Test func writesWhenClientDiffers() {
     let lib = Library(servers: [srv("a", clients: [.cursor: true])])
-    let out = SyncEngine.plan(SyncInput(library: lib, snapshots: [.cursor: []], suppressed: [], gatewayPort: 7337, now: now))
+    // suppressed: this is what a mutation-triggered sync looks like (presence rule skipped)
+    let out = SyncEngine.plan(SyncInput(library: lib, snapshots: [.cursor: []], suppressed: [.cursor], gatewayPort: 7337, now: now))
     #expect(out.writes[.cursor] == [ExternalServer(name: "a", kind: .stdio, command: "cmd-a")])
 }
 
@@ -1691,14 +1692,16 @@ public actor SyncCoordinator {
         return try sync(now: now)
     }
 
-    /// Apply a change to the library, then sync it out.
+    /// Apply a change to the library, then sync it out. The library change is intentional, so the
+    /// "client wins on presence" rule is skipped for this pass (otherwise enabling a server for a
+    /// client whose file doesn't have it yet would be immediately undone).
     public func mutate(_ f: (inout Library) throws -> Void) async throws {
         try f(&library)
         try store.save(library)
-        try sync()
+        try sync(skipPresence: true)
     }
 
-    private func sync(now: Date = .init()) throws -> SyncOutput {
+    private func sync(now: Date = .init(), skipPresence: Bool = false) throws -> SyncOutput {
         var snapshots: [ClientID: [ExternalServer]] = [:]
         for a in adapters where a.isInstalled() {
             do {
@@ -1708,7 +1711,7 @@ public actor SyncCoordinator {
                 health[a.id] = ClientHealth(healthy: false, error: String(describing: error), lastSync: health[a.id]?.lastSync)
             }
         }
-        let suppressed = Set(suppressedUntil.filter { $0.value > now }.keys)
+        let suppressed = skipPresence ? Set(snapshots.keys) : Set(suppressedUntil.filter { $0.value > now }.keys)
         let out = SyncEngine.plan(SyncInput(library: library, snapshots: snapshots, suppressed: suppressed,
                                             gatewayPort: gatewayPort, now: now))
         if out.library != library {
