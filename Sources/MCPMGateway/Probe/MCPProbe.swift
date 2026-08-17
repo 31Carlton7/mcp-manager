@@ -314,9 +314,16 @@ public enum MCPProbe {
         shutdown()
         readerTask.cancel()
 
+        /// A child that closes stdout is usually exiting; give the kernel a moment to reap it so
+        /// `isRunning`/`terminationStatus`/stderr are meaningful.
+        func settle() async {
+            for _ in 0..<20 where process.isRunning { try? await Task.sleep(for: .milliseconds(50)) }
+        }
+
         if let outcome {
             if outcome.ok { result = outcome; return result }
             // initialize never came back or came back as an error
+            await settle()
             if !process.isRunning, let err = firstStderrLine() {
                 result.error = err
             } else if !process.isRunning {
@@ -331,6 +338,7 @@ public enum MCPProbe {
             result = partial   // identified, tools/list just never arrived
             return result
         }
+        await settle()
         if !process.isRunning, let err = firstStderrLine() {
             result.error = err
         } else {
