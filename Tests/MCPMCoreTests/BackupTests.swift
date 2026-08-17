@@ -45,6 +45,23 @@ import Foundation
     #expect(contents == ["v0", "v1"])
 }
 
+@Test func backupListIsNewestFirstAcrossSameSecondCollisions() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("mcpm-b-\(UUID().uuidString)")
+    let cfg = root.appendingPathComponent("mcp.json")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let b = BackupStore(root: root.appendingPathComponent("backups"), keep: 5)
+    let date = Date(timeIntervalSince1970: 0)
+
+    try Data("v0".utf8).write(to: cfg)
+    try b.backup(cfg, for: .cursor, at: date)
+    try Data("v1".utf8).write(to: cfg)
+    try b.backup(cfg, for: .cursor, at: date)
+
+    // "…00Z-2.json" is the newer one even though it sorts *after* "…00Z.json" by name.
+    let files = try b.list(for: .cursor)
+    #expect(try files.map { try String(contentsOf: $0, encoding: .utf8) } == ["v1", "v0"])
+}
+
 @Test func backupFileIsPrivate() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent("mcpm-b-\(UUID().uuidString)")
     let cfg = root.appendingPathComponent("mcp.json")
