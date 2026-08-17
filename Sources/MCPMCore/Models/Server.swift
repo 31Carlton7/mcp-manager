@@ -10,21 +10,44 @@ public struct Server: Codable, Equatable, Sendable, Identifiable {
     public var args: [String]
     public var env: [String: String]
     public var url: String?
+    public var headers: [String: String]
     public var auth: AuthKind
     public var clients: [ClientID: Bool]
     public var source: String
     public var createdAt: Date
 
     public init(id: String, name: String, kind: ServerKind, command: String? = nil, args: [String] = [],
-                env: [String: String] = [:], url: String? = nil, auth: AuthKind = .none,
+                env: [String: String] = [:], url: String? = nil, headers: [String: String] = [:], auth: AuthKind = .none,
                 clients: [ClientID: Bool] = [:], source: String, createdAt: Date) {
         self.id = id; self.name = name; self.kind = kind; self.command = command; self.args = args
-        self.env = env; self.url = url; self.auth = auth; self.clients = clients
+        self.env = env; self.url = url; self.headers = headers; self.auth = auth; self.clients = clients
         self.source = source
         // JSONEncoder.mcpm's .iso8601 strategy has whole-second resolution (no fractional
         // seconds), so normalize here to keep in-memory equality consistent with a save/load
         // round trip through Store.
         self.createdAt = Date(timeIntervalSince1970: createdAt.timeIntervalSince1970.rounded(.down))
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, kind, command, args, env, url, headers, auth, clients, source, createdAt
+    }
+
+    /// Custom decode so `headers` defaults to `[:]` when absent, keeping older library files
+    /// (written before `headers` existed) loadable.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        kind = try c.decode(ServerKind.self, forKey: .kind)
+        command = try c.decodeIfPresent(String.self, forKey: .command)
+        args = try c.decode([String].self, forKey: .args)
+        env = try c.decode([String: String].self, forKey: .env)
+        url = try c.decodeIfPresent(String.self, forKey: .url)
+        headers = try c.decodeIfPresent([String: String].self, forKey: .headers) ?? [:]
+        auth = try c.decode(AuthKind.self, forKey: .auth)
+        clients = try c.decode([ClientID: Bool].self, forKey: .clients)
+        source = try c.decode(String.self, forKey: .source)
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
     }
 
     public func isEnabled(for client: ClientID) -> Bool { clients[client] ?? false }
@@ -38,14 +61,14 @@ public struct Server: Codable, Equatable, Sendable, Identifiable {
             return ExternalServer(name: name, kind: .stdio, command: command, args: args, env: env)
         case .remote:
             let u = usesGateway ? GatewayURL.make(port: gatewayPort, serverID: id) : (url ?? "")
-            return ExternalServer(name: name, kind: .remote, url: u)
+            return ExternalServer(name: name, kind: .remote, url: u, headers: usesGateway ? [:] : headers)
         }
     }
 
     /// Build a library server from something found in a client file.
     public static func imported(_ e: ExternalServer, id: String, from client: ClientID, now: Date) -> Server {
         Server(id: id, name: e.name, kind: e.kind, command: e.command, args: e.args, env: e.env,
-               url: e.url, auth: .none, clients: [client: true], source: "imported:\(client.rawValue)",
+               url: e.url, headers: e.headers, auth: .none, clients: [client: true], source: "imported:\(client.rawValue)",
                createdAt: now)
     }
 }

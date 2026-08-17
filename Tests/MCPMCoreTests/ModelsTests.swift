@@ -37,6 +37,15 @@ import Foundation
     #expect(!lib.servers[0].isEnabled(for: .codex))
 }
 
+@Test func serverDecodesWithoutHeadersField() throws {
+    let json = """
+    {"id":"a","name":"a","kind":"stdio","command":"cmd-a","args":[],"env":{},"auth":"none",
+    "clients":{},"source":"manual","createdAt":"1970-01-01T00:00:00Z"}
+    """
+    let s = try JSONDecoder.mcpm.decode(Server.self, from: Data(json.utf8))
+    #expect(s.headers.isEmpty)
+}
+
 @Test func slugs() {
     #expect(Slug.make("Figma Desktop") == "figma-desktop")
     #expect(Slug.make("  --Hello__World!! ") == "hello-world")

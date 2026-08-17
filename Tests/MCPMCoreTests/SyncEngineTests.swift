@@ -94,3 +94,39 @@ private func srv(_ id: String, kind: ServerKind = .stdio, auth: AuthKind = .none
     #expect(out.writes[.cursor]?.first?.command == "cmd-a")
     #expect(out.library == lib)
 }
+
+@Test func suppressedClientCannotReenableViaStaleSnapshot() {
+    let lib = Library(servers: [srv("a", clients: [.cursor: false])])
+    let out = SyncEngine.plan(SyncInput(library: lib, snapshots: [.cursor: [ExternalServer(name: "a", kind: .stdio, command: "cmd-a")]],
+                                        suppressed: [.cursor], gatewayPort: 7337, now: now))
+    #expect(out.library.server(id: "a")?.clients[.cursor] == false)
+    #expect(out.writes[.cursor] == [])
+}
+
+@Test func suppressedClientDoesNotReadoptRemovedServer() {
+    let out = SyncEngine.plan(SyncInput(library: Library(), snapshots: [
+        .cursor: [ExternalServer(name: "notion", kind: .remote, url: "http://localhost:7337/s/notion/mcp")],
+    ], suppressed: [.cursor], gatewayPort: 7337, now: now))
+    #expect(out.adopted.isEmpty)
+    #expect(out.writes[.cursor] == [])
+}
+
+@Test func importKeepsHeadersAndProducesNoWrite() {
+    let out = SyncEngine.plan(SyncInput(library: Library(), snapshots: [
+        .cursor: [ExternalServer(name: "exa", kind: .remote, url: "https://mcp.exa.ai/mcp", headers: ["Authorization": "Bearer x"])],
+    ], suppressed: [], gatewayPort: 7337, now: now))
+    #expect(out.adopted.count == 1)
+    #expect(out.adopted[0].headers == ["Authorization": "Bearer x"])
+    #expect(out.writes.isEmpty)
+}
+
+@Test func adoptionSlugSuffixIsDeterministicRegardlessOfSnapshotOrder() {
+    // "foo bar" and "Foo Bar" both slugify to "foo-bar"; sorting by name before adopting means
+    // whichever comes first alphabetically ("Foo Bar") always claims the base slug.
+    let snapshot = [ExternalServer(name: "foo bar", kind: .stdio, command: "cmd-2"),
+                     ExternalServer(name: "Foo Bar", kind: .stdio, command: "cmd-1")]
+    let out = SyncEngine.plan(SyncInput(library: Library(), snapshots: [.cursor: snapshot],
+                                        suppressed: [], gatewayPort: 7337, now: now))
+    #expect(out.library.server(id: "foo-bar")?.command == "cmd-1")
+    #expect(out.library.server(id: "foo-bar-2")?.command == "cmd-2")
+}

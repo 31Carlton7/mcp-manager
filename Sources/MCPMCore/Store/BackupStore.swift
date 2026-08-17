@@ -15,9 +15,14 @@ public struct BackupStore: Sendable {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime]
         let stamp = f.string(from: date).replacingOccurrences(of: ":", with: "-")
-        let dest = d.appendingPathComponent(stamp).appendingPathExtension(file.pathExtension)
-        try? FileManager.default.removeItem(at: dest)
+        var dest = d.appendingPathComponent(stamp).appendingPathExtension(file.pathExtension)
+        var suffix = 2
+        while FileManager.default.fileExists(atPath: dest.path) {
+            dest = d.appendingPathComponent("\(stamp)-\(suffix)").appendingPathExtension(file.pathExtension)
+            suffix += 1
+        }
         try FileManager.default.copyItem(at: file, to: dest)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: dest.path)
         for old in try list(for: client).dropFirst(keep) { try FileManager.default.removeItem(at: old) }
     }
 

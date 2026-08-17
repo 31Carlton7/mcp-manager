@@ -4,7 +4,8 @@ public struct SyncInput: Sendable {
     public var library: Library
     /// Only readable, installed clients appear here. Missing key = leave that client alone.
     public var snapshots: [ClientID: [ExternalServer]]
-    /// Clients we just wrote; skip the "client wins on presence" rule for them this round.
+    /// Clients we just wrote; their snapshot is stale by definition, so skip adoption and the
+    /// "client wins on presence" rule for them this round — they're projection-only.
     public var suppressed: Set<ClientID>
     public var gatewayPort: Int
     public var now: Date
@@ -26,10 +27,14 @@ public enum SyncEngine {
         var lib = input.library
         var adopted: [Server] = []
 
-        // 1 + 2: import unknown servers, mark presence
+        // 1 + 2: import unknown servers, mark presence.
+        // Suppressed clients (we just wrote them this round) skip this whole step: their
+        // snapshot is stale by definition, so it must not adopt or disable anything — it's
+        // projection-only in the next step.
         for (client, external) in input.snapshots.sorted(by: { $0.key < $1.key }) {
+            if input.suppressed.contains(client) { continue }
             var seenIDs = Set<String>()
-            for e in external {
+            for e in external.sorted(by: { $0.name < $1.name }) {
                 if let idx = match(e, in: lib, port: input.gatewayPort) {
                     seenIDs.insert(lib.servers[idx].id)
                     if lib.servers[idx].clients[client] != true {
@@ -43,10 +48,8 @@ public enum SyncEngine {
                     seenIDs.insert(id)
                 }
             }
-            if !input.suppressed.contains(client) {
-                for i in lib.servers.indices where lib.servers[i].clients[client] == true && !seenIDs.contains(lib.servers[i].id) {
-                    lib.servers[i].clients[client] = false
-                }
+            for i in lib.servers.indices where lib.servers[i].clients[client] == true && !seenIDs.contains(lib.servers[i].id) {
+                lib.servers[i].clients[client] = false
             }
         }
 
