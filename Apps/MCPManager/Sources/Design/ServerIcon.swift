@@ -8,14 +8,12 @@ import MCPMCore
 struct ServerIcon: View {
     let server: Server
     var size: CGFloat = 26
-    /// Off for previews of a server that is still being typed: the host changes with every
-    /// keystroke, and each new host is a fetch for a name that may never exist.
-    var fetchesFavicon = true
 
     @State private var favicon: NSImage?
 
     private var source: IconSource {
-        IconSource.resolve(name: server.name, kind: server.kind, url: server.url, command: server.command)
+        IconSource.resolve(name: server.name, kind: server.kind, url: server.url,
+                           command: server.command, args: server.args)
     }
 
     private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: size * 0.27, style: .continuous) }
@@ -32,7 +30,7 @@ struct ServerIcon: View {
             symbolTile(name)
         case .monogram(let text, let hue):
             monogramTile(text, hue: hue)
-        case .favicon(let host):
+        case .favicon(let hosts):
             monogramTile(IconSource.monogram(for: server.name), hue: IconSource.hue(server.name))
                 .overlay {
                     if let favicon {
@@ -44,9 +42,8 @@ struct ServerIcon: View {
                     }
                 }
                 .animation(.easeOut(duration: 0.18), value: favicon != nil)
-                .task(id: host) {
-                    guard fetchesFavicon,
-                          let data = await FaviconCache.shared.iconData(for: host) else { return }
+                .task(id: hosts) {
+                    guard let data = await FaviconCache.shared.iconData(for: hosts) else { return }
                     favicon = NSImage(data: data)
                 }
         }
@@ -108,42 +105,48 @@ actor FaviconCache {
         session = URLSession(configuration: config)
     }
 
-    /// PNG data for `host`, or nil if there is none to be had. Never throws.
-    func iconData(for host: String) async -> Data? {
-        if let entry = memory[host] { return entry.data }
-        if let running = inFlight[host] { return await running.value }
+    /// PNG data for the first of `hosts` that has an icon, or nil if none does. Never throws.
+    func iconData(for hosts: [String]) async -> Data? {
+        let key = hosts.joined(separator: "_")
+        if let entry = memory[key] { return entry.data }
+        if let running = inFlight[key] { return await running.value }
 
-        let file = directory.appending(path: "\(Self.fileName(host)).png", directoryHint: .notDirectory)
+        let file = directory.appending(path: "\(Self.fileName(key)).png", directoryHint: .notDirectory)
         let session = self.session
         let directory = self.directory
         let task = Task<Data?, Never> {
             if let cached = try? Data(contentsOf: file) { return cached }
-            guard let png = await Self.download(host: host, session: session) else { return nil }
+            guard let png = await Self.download(hosts: hosts, session: session) else { return nil }
             try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             try? png.write(to: file, options: .atomic)
             return png
         }
-        inFlight[host] = task
+        inFlight[key] = task
 
         let data = await task.value
-        inFlight[host] = nil
-        memory[host] = data.map(Entry.icon) ?? .missing
+        inFlight[key] = nil
+        memory[key] = data.map(Entry.icon) ?? .missing
         return data
     }
 
-    /// The site's own icon first, Google's favicon service as the fallback.
-    private static func download(host: String, session: URLSession) async -> Data? {
-        let sources = [
-            "https://\(host)/favicon.ico",
-            "https://www.google.com/s2/favicons?domain=\(host)&sz=64",
-        ].compactMap(URL.init(string:))
+    /// Per host: the site's own icon first, then Google's favicon service, then DuckDuckGo's.
+    /// Both services answer a miss with 404 and a placeholder image, so the status code is what
+    /// separates a real icon from a grey globe.
+    private static func download(hosts: [String], session: URLSession) async -> Data? {
+        for host in hosts {
+            let sources = [
+                "https://\(host)/favicon.ico",
+                "https://www.google.com/s2/favicons?domain=\(host)&sz=64",
+                "https://icons.duckduckgo.com/ip3/\(host).ico",
+            ].compactMap(URL.init(string:))
 
-        for url in sources {
-            guard let (data, response) = try? await session.data(from: url),
-                  let http = response as? HTTPURLResponse, http.statusCode == 200,
-                  let png = pngData(from: data)
-            else { continue }
-            return png
+            for url in sources {
+                guard let (data, response) = try? await session.data(from: url),
+                      let http = response as? HTTPURLResponse, http.statusCode == 200,
+                      let png = pngData(from: data)
+                else { continue }
+                return png
+            }
         }
         return nil
     }
@@ -157,8 +160,8 @@ actor FaviconCache {
         return rep.representation(using: .png, properties: [:])
     }
 
-    private static func fileName(_ host: String) -> String {
+    private static func fileName(_ key: String) -> String {
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: ".-_"))
-        return String(host.unicodeScalars.map { allowed.contains($0) ? Character($0) : "-" })
+        return String(key.unicodeScalars.map { allowed.contains($0) ? Character($0) : "-" })
     }
 }

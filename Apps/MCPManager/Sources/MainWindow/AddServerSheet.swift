@@ -159,7 +159,7 @@ struct AddServerSheet: View {
     private func preview(_ server: ExternalServer) -> some View {
         let shown = previewServer(server)
         return HStack(spacing: Space.s) {
-            ServerIcon(server: shown, size: 26, fetchesFavicon: false)
+            ServerIcon(server: shown, size: 26)
             VStack(alignment: .leading, spacing: 1) {
                 Text(shown.name)
                     .font(.system(size: 13, weight: .semibold))

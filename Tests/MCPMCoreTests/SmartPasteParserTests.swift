@@ -33,6 +33,27 @@ import Foundation
     #expect(bare.servers == [ExternalServer(name: "mcp-server-fetch", kind: .stdio, command: "uvx", args: ["mcp-server-fetch"])])
 }
 
+@Test func parsesClaudeMCPAddCommands() {
+    #expect(SmartPasteParser.parse("claude mcp add --scope user notion https://mcp.notion.com/mcp").servers ==
+            [ExternalServer(name: "notion", kind: .remote, url: "https://mcp.notion.com/mcp")])
+    #expect(SmartPasteParser.parse("claude mcp add --transport http linear https://mcp.linear.app/mcp").servers ==
+            [ExternalServer(name: "linear", kind: .remote, url: "https://mcp.linear.app/mcp")])
+    #expect(SmartPasteParser.parse("claude mcp add pw -- npx -y @playwright/mcp@latest").servers ==
+            [ExternalServer(name: "pw", kind: .stdio, command: "npx", args: ["-y", "@playwright/mcp@latest"])])
+    #expect(SmartPasteParser.parse("claude mcp add -e KEY=v pw -- npx x").servers ==
+            [ExternalServer(name: "pw", kind: .stdio, command: "npx", args: ["x"], env: ["KEY": "v"])])
+    #expect(SmartPasteParser.parse(#"claude mcp add -H "Authorization: Bearer t" ex https://mcp.exa.ai/mcp"#).servers ==
+            [ExternalServer(name: "ex", kind: .remote, url: "https://mcp.exa.ai/mcp", headers: ["Authorization": "Bearer t"])])
+    #expect(SmartPasteParser.parse("claude mcp add --scope user").summary == "Couldn't read that claude mcp add command")
+}
+
+@Test func mcpRemoteBridgeIsJustARemoteServer() {
+    #expect(SmartPasteParser.parse("npx -y mcp-remote https://mcp.notion.com/mcp").servers ==
+            [ExternalServer(name: "notion", kind: .remote, url: "https://mcp.notion.com/mcp")])
+    #expect(SmartPasteParser.parse("claude mcp add notes -- npx mcp-remote@latest https://mcp.notion.com/mcp").servers ==
+            [ExternalServer(name: "notes", kind: .remote, url: "https://mcp.notion.com/mcp")])
+}
+
 @Test func emptyAndGarbageYieldNothing() {
     #expect(SmartPasteParser.parse("").servers.isEmpty)
     #expect(SmartPasteParser.parse("{not json").servers.isEmpty)
