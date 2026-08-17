@@ -603,7 +603,11 @@ public protocol ClientAdapter: Sendable {
 }
 
 public extension ClientAdapter {
-    func readData() -> Data? { try? Data(contentsOf: configPath) }
+    /// nil only when the file does not exist; other read errors are thrown.
+    func readData() throws -> Data? {
+        do { return try Data(contentsOf: configPath) }
+        catch let e as CocoaError where e.code == .fileReadNoSuchFile { return nil }
+    }
 }
 ```
 
@@ -1698,7 +1702,7 @@ public actor SyncCoordinator {
         var snapshots: [ClientID: [ExternalServer]] = [:]
         for a in adapters where a.isInstalled() {
             do {
-                snapshots[a.id] = try a.parse(a.readData())
+                snapshots[a.id] = try a.parse(try a.readData())
                 health[a.id] = ClientHealth(healthy: true, error: nil, lastSync: now)
             } catch {
                 health[a.id] = ClientHealth(healthy: false, error: String(describing: error), lastSync: health[a.id]?.lastSync)
@@ -1713,7 +1717,7 @@ public actor SyncCoordinator {
         }
         for (client, desired) in out.writes {
             guard let a = adapters.first(where: { $0.id == client }) else { continue }
-            let current = a.readData()
+            let current = try a.readData()
             let data = try a.render(desired, over: current)
             guard data != current else { continue }
             try backups.backup(a.configPath, for: client, at: now)
