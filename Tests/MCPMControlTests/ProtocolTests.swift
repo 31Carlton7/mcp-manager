@@ -77,6 +77,19 @@ func authAndTestCommandsRoundTrip(command: ControlCommand) throws {
     #expect(try JSONDecoder.mcpm.decode(ControlRequest.self, from: data).command == command)
 }
 
+@Test func updateServerParamsCarriesHeadersAndOmitsUntouchedFields() throws {
+    let p = UpdateServerParams(id: "notion", headers: ["X-Trace": "on"], auth: .none)
+    let data = try JSONEncoder.mcpm.encode(p)
+    #expect(try JSONDecoder.mcpm.decode(UpdateServerParams.self, from: data) == p)
+
+    // A patch says nothing about the fields it leaves out, so they must not be on the wire at all.
+    let obj = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+    #expect(obj["headers"] as! [String: String] == ["X-Trace": "on"])
+    #expect(obj["url"] == nil)
+    #expect(try JSONDecoder.mcpm.decode(UpdateServerParams.self,
+                                        from: Data(#"{"id":"notion"}"#.utf8)).headers == nil)
+}
+
 @Test func authAndTestMethodNames() {
     #expect(ControlCommand.authStart(.init(id: "n")).method == "auth.start")
     #expect(ControlCommand.authSignOut(.init(id: "n")).method == "auth.signOut")

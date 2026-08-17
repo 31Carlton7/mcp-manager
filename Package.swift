@@ -36,9 +36,13 @@ let package = Package(
             .product(name: "Logging", package: "swift-log"),
             .product(name: "ServiceLifecycle", package: "swift-service-lifecycle"),
         ]),
-        .executableTarget(name: "mcpmd", dependencies: ["MCPMCore", "MCPMControl", "MCPMGateway"]),
+        // The daemon's request handling lives in a library rather than the executable so it can be
+        // tested: a test target cannot import an executable target.
+        .target(name: "MCPMDaemon", dependencies: ["MCPMCore", "MCPMControl", "MCPMGateway"]),
+        .executableTarget(name: "mcpmd", dependencies: ["MCPMCore", "MCPMControl", "MCPMGateway", "MCPMDaemon"]),
         .testTarget(name: "MCPMCoreTests", dependencies: ["MCPMCore"], resources: [.copy("Fixtures")]),
         .testTarget(name: "MCPMControlTests", dependencies: ["MCPMControl"]),
+        .testTarget(name: "MCPMDaemonTests", dependencies: ["MCPMDaemon"]),
         .testTarget(name: "MCPMGatewayTests", dependencies: [
             "MCPMGateway",
             .product(name: "Hummingbird", package: "hummingbird"),

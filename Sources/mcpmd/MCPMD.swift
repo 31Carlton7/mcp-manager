@@ -3,20 +3,10 @@ import Foundation
 import os
 import MCPMCore
 import MCPMControl
+import MCPMDaemon
 import MCPMGateway
 
 let log = Logger(subsystem: "co.charmtechnologies.mcpmd", category: "main")
-
-/// The gateway's view of the library. Reads go straight to the coordinator so a server edited a
-/// moment ago is proxied with its new URL; `markNeedsAuth` only nudges the status pump, since the
-/// state itself is derived from the credential store on every read.
-struct LibraryServers: GatewayServerSource {
-    let coord: SyncCoordinator
-    let changed: @Sendable (String) -> Void
-
-    func server(id: String) async -> Server? { await coord.currentLibrary().server(id: id) }
-    func markNeedsAuth(id: String) async { changed(id) }
-}
 
 /// The daemon: sync the library out to every client, watch their configs, and serve the app over
 /// the control socket.
@@ -45,7 +35,7 @@ enum MCPMD {
         let paths = Paths()
         try paths.ensureRoot()
 
-        let gatewayPort = ProcessInfo.processInfo.environment["MCPM_GATEWAY_PORT"].flatMap(Int.init) ?? 7337
+        let gatewayPort = configuredGatewayPort()
         let coord = SyncCoordinator(store: Store(url: paths.library), adapters: AllAdapters.make(),
                                     backups: BackupStore(root: paths.backups), gatewayPort: gatewayPort)
 
@@ -115,7 +105,7 @@ enum MCPMD {
         }
         await coord.startWatching()
 
-        let signalSources = trapSignals(stopping: server)
+        let signalSources = trapSignals(stopping: server, gateway: gateway)
 
         // The work now happens on the event loops and the watcher; this task only has to stay
         // alive — and keep the signal sources alive with it, since dropping one cancels it.
@@ -123,6 +113,19 @@ enum MCPMD {
             try await Task.sleep(for: .seconds(3600))
             withExtendedLifetime(signalSources) {}
         }
+    }
+
+    /// `MCPM_GATEWAY_PORT` exists for tests and for a machine where 7337 is spoken for. A value
+    /// that is not a usable TCP port is a typo, and binding 0 would hand out an ephemeral port that
+    /// no client config points at — so it is reported and ignored.
+    private static func configuredGatewayPort() -> Int {
+        let fallback = 7337
+        guard let raw = ProcessInfo.processInfo.environment["MCPM_GATEWAY_PORT"] else { return fallback }
+        guard let port = Int(raw), (1...65535).contains(port) else {
+            log.error("MCPM_GATEWAY_PORT=\(raw, privacy: .public) is not a port; using \(fallback, privacy: .public)")
+            return fallback
+        }
+        return port
     }
 
     /// The Keychain by default. An unsigned development build gets a new code identity on every
@@ -140,7 +143,7 @@ enum MCPMD {
     /// that owns it. This lives outside `main()` on purpose: a handler closure formed inside that
     /// main-actor function inherits its isolation, and dispatch running it off the main queue then
     /// trips a queue assertion and traps.
-    private static func trapSignals(stopping server: ControlServer) -> [DispatchSourceSignal] {
+    private static func trapSignals(stopping server: ControlServer, gateway: Gateway) -> [DispatchSourceSignal] {
         let queue = DispatchQueue(label: "co.charmtechnologies.mcpmd.signals")
         return [SIGTERM, SIGINT].map { sig in
             signal(sig, SIG_IGN)
@@ -148,6 +151,9 @@ enum MCPMD {
             source.setEventHandler {
                 Task {
                     try? await server.stop()
+                    // Gives a client parked on a proxied SSE stream its two seconds to finish,
+                    // rather than having the connection die with the process.
+                    await gateway.stop()
                     exit(0)
                 }
             }

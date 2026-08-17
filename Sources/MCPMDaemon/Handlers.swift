@@ -3,13 +3,13 @@ import MCPMCore
 import MCPMControl
 import MCPMGateway
 
-let daemonVersion = "0.1.0"
+public let daemonVersion = "0.1.0"
 
-enum HandlerError: Error, CustomStringConvertible {
+public enum HandlerError: Error, CustomStringConvertible {
     case notFound(String)
     case invalid(String)
 
-    var description: String {
+    public var description: String {
         switch self {
         case .notFound(let id): "no server with id \"\(id)\""
         case .invalid(let why): why
@@ -18,7 +18,7 @@ enum HandlerError: Error, CustomStringConvertible {
 }
 
 /// Turns control requests into coordinator calls. One instance serves every connection.
-struct Handlers: Sendable {
+public struct Handlers: Sendable {
     let coord: SyncCoordinator
     let auth: AuthManager
     /// The port the gateway bound, or nil if it never started. Authenticated servers are
@@ -29,8 +29,8 @@ struct Handlers: Sendable {
     let gatewayError: String?
     let probeTimeout: Duration
 
-    init(coord: SyncCoordinator, auth: AuthManager, gatewayPort: Int?, gatewayError: String? = nil,
-         probeTimeout: Duration = .seconds(10)) {
+    public init(coord: SyncCoordinator, auth: AuthManager, gatewayPort: Int?, gatewayError: String? = nil,
+                probeTimeout: Duration = .seconds(10)) {
         self.coord = coord
         self.auth = auth
         self.gatewayPort = gatewayPort
@@ -38,7 +38,7 @@ struct Handlers: Sendable {
         self.probeTimeout = probeTimeout
     }
 
-    func status() async -> DaemonStatus {
+    public func status() async -> DaemonStatus {
         // One read: a status assembled from separate calls could show a library and a health map
         // from either side of a sync.
         let snap = await coord.snapshot()
@@ -52,14 +52,17 @@ struct Handlers: Sendable {
         var servers: [ServerStatus] = []
         servers.reserveCapacity(snap.library.servers.count)
         for s in snap.library.servers {
-            servers.append(ServerStatus(server: s, state: await auth.state(for: s.id, auth: s.auth).rawValue))
+            // A server with no auth has nothing in the credential store, so a status pass over a
+            // library of them never touches the actor (or, with the Keychain, the security daemon).
+            let state = s.auth == .none ? AuthState.none : await auth.state(for: s.id, auth: s.auth)
+            servers.append(ServerStatus(server: s, state: state.rawValue))
         }
         return DaemonStatus(daemonVersion: daemonVersion, apiVersion: controlAPIVersion,
                             servers: servers, clients: clients,
                             lastError: snap.lastError ?? gatewayError, gatewayPort: gatewayPort)
     }
 
-    func handle(_ req: ControlRequest) async throws -> ControlResult {
+    public func handle(_ req: ControlRequest) async throws -> ControlResult {
         switch req.command {
         case .hello:
             return .hello(daemonVersion: daemonVersion, apiVersion: controlAPIVersion)
@@ -79,6 +82,7 @@ struct Handlers: Sendable {
             }
             return .ack
         case .updateServer(let p):
+            let previousAuth = await coord.currentLibrary().server(id: p.id)?.auth
             try await coord.mutate { lib in
                 guard let i = lib.servers.firstIndex(where: { $0.id == p.id }) else { throw HandlerError.notFound(p.id) }
                 // Validate the patched copy before it goes into the library: a half-applied
@@ -89,14 +93,22 @@ struct Handlers: Sendable {
                 if let v = p.args { patched.args = v }
                 if let v = p.env { patched.env = v }
                 if let v = p.url { patched.url = v }
+                if let v = p.headers { patched.headers = v }
                 if let v = p.auth { patched.auth = v }
                 try validate(name: patched.name, kind: patched.kind, command: patched.command,
                              url: patched.url, auth: patched.auth)
                 lib.servers[i] = patched
             }
+            // Credentials belong to one auth kind: a token kept across a switch to header auth (or
+            // to none) would be re-attached the moment the user switched back, long after the
+            // server it was issued for may have changed.
+            if let new = p.auth, let previousAuth, new != previousAuth { await auth.forget(id: p.id) }
             return .ack
         case .removeServer(let p):
             try await coord.mutate { lib in lib.servers.removeAll { $0.id == p.id } }
+            // Ids are slugs of the name, so the next server called "Notion" claims this one's id.
+            // A credential left behind would then be sent to whatever URL that new server has.
+            await auth.forget(id: p.id)
             return .ack
         case .setClient(let p):
             try await coord.mutate { lib in
@@ -141,11 +153,24 @@ struct Handlers: Sendable {
             guard s.auth == .header else {
                 throw HandlerError.invalid("\(s.name) is not set to header auth")
             }
-            guard !p.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                throw HandlerError.invalid("a header needs a name")
-            }
+            try validateHeader(name: p.name, value: p.value)
             try await auth.setHeader(id: s.id, name: p.name, value: p.value)
             return .ack
+        }
+    }
+
+    /// A pasted header goes onto the wire verbatim. RFC 7230 says a field name is a token and a
+    /// field value carries no bare CR or LF; anything else is a request-splitting attempt or a
+    /// copy-paste accident, and both are better refused here than at the upstream server.
+    private func validateHeader(name: String, value: String) throws {
+        // RFC 7230 §3.2.6 tchar.
+        let tchar = Set("!#$%&'*+-.^_`|~0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+        guard !name.isEmpty, name.allSatisfy(tchar.contains) else {
+            throw HandlerError.invalid("\"\(name)\" is not a valid header name")
+        }
+        // Scalars, not characters: "\r\n" is a single Swift `Character` and matches neither half.
+        guard !value.unicodeScalars.contains(where: { $0 == "\r" || $0 == "\n" }) else {
+            throw HandlerError.invalid("a header value cannot contain a line break")
         }
     }
 

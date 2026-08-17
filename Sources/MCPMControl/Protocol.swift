@@ -75,11 +75,15 @@ public struct UpdateServerParams: Codable, Equatable, Sendable {
     public var args: [String]?
     public var env: [String: String]?
     public var url: String?
+    /// The static headers written into client configs, for a remote server with `auth: .none`.
+    /// Credentials belong in `auth.setHeader`, which keeps them out of every client's config file.
+    public var headers: [String: String]?
     public var auth: AuthKind?
     public init(id: String, name: String? = nil, command: String? = nil, args: [String]? = nil,
-                env: [String: String]? = nil, url: String? = nil, auth: AuthKind? = nil) {
+                env: [String: String]? = nil, url: String? = nil, headers: [String: String]? = nil,
+                auth: AuthKind? = nil) {
         self.id = id; self.name = name; self.command = command; self.args = args
-        self.env = env; self.url = url; self.auth = auth
+        self.env = env; self.url = url; self.headers = headers; self.auth = auth
     }
 }
 
