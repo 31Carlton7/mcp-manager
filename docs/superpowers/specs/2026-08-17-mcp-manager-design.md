@@ -155,6 +155,7 @@ Keychain: `kSecAttrAccessibleAfterFirstUnlock`, no iCloud sync, shared access gr
 - `id`: slug, unique, derived from name on create; immutable.
 - `kind`: `stdio | remote`.
 - `auth`: `none | oauth | header`. `header` stores `{name, value}` in Keychain, never in the library file.
+- `headers`: static HTTP headers for remote servers (persisted; secret-bearing headers move to Keychain with `auth: header` in Plan 2). Written to clients only when the server does not route through the gateway.
 - `clients`: the enable matrix; keys are adapter ids. Missing key = false.
 - `source`: `catalog:<slug> | imported:<client> | manual | pasted`.
 - Runtime status (`connected | needsAuth | expiring | unhealthy | ok`) is *not* persisted; it lives in daemon memory and the status stream.
@@ -191,7 +192,7 @@ Triggers: daemon start; FSEvents on any adapter `configPath` (debounced 500 ms);
 
 Algorithm:
 1. **Import.** For each snapshot, each `ExternalServer` not matching a library entry (match order: name; then remote URL; then command+args) is adopted: new library entry, `clients[thisClient] = true`, all others false, `source: imported:<client>`. Entries the gateway wrote (URL matches `localhost:<port>/s/<id>/mcp`) map back to `<id>` and are not re-adopted.
-2. **Presence.** A library server with `clients[c] == true` that is absent from `c`'s snapshot → set `clients[c] = false` (respect CLI removals). Exception: during the self-suppress window after our own write, skip this step for that client.
+2. **Presence.** A library server with `clients[c] == true` that is absent from `c`'s snapshot → set `clients[c] = false` (respect CLI removals). Exception: *suppressed* clients — those we wrote within the last 2 s, and all clients during a sync triggered by an app-side mutation — have stale snapshots and are **projected only**: no adoption, no presence changes for them in that pass.
 3. **Project.** For each adapter: desired list = library entries with `clients[adapter] == true`, converted to `ExternalServer`; remote `oauth`/`header` servers become `url: http://localhost:<port>/s/<id>/mcp`.
 4. **Write** only if desired ≠ current. Atomic (temp file + rename), copy previous file to `~/.mcpm/backups/<client>/<ISO-timestamp>.<ext>` (keep last 5), then arm a 2 s self-suppress window for that adapter's watcher.
 5. **Conflict rule:** library wins on shape (command/args/env/url), client wins on presence. That is the entire policy and it is stated verbatim in the Clients tab.

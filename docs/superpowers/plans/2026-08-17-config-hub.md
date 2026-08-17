@@ -1330,10 +1330,12 @@ public enum SyncEngine {
         var lib = input.library
         var adopted: [Server] = []
 
-        // 1 + 2: import unknown servers, mark presence
-        for (client, external) in input.snapshots.sorted(by: { $0.key < $1.key }) {
+        // 1 + 2: import unknown servers, mark presence.
+        // Suppressed clients (just written by us, or all clients during a mutation-triggered sync)
+        // have stale snapshots: they are projected only — no adoption, no presence changes.
+        for (client, external) in input.snapshots.sorted(by: { $0.key < $1.key }) where !input.suppressed.contains(client) {
             var seenIDs = Set<String>()
-            for e in external {
+            for e in external.sorted(by: { $0.name < $1.name }) {
                 if let idx = match(e, in: lib, port: input.gatewayPort) {
                     seenIDs.insert(lib.servers[idx].id)
                     if lib.servers[idx].clients[client] != true {
@@ -1347,10 +1349,8 @@ public enum SyncEngine {
                     seenIDs.insert(id)
                 }
             }
-            if !input.suppressed.contains(client) {
-                for i in lib.servers.indices where lib.servers[i].clients[client] == true && !seenIDs.contains(lib.servers[i].id) {
-                    lib.servers[i].clients[client] = false
-                }
+            for i in lib.servers.indices where lib.servers[i].clients[client] == true && !seenIDs.contains(lib.servers[i].id) {
+                lib.servers[i].clients[client] = false
             }
         }
 
