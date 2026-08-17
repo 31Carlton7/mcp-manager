@@ -5,7 +5,7 @@ import MCPMCore
 
 public enum ControlClientError: Error, Equatable { case notConnected, remote(String), badResponse }
 
-/// Async client for the daemon. `send` awaits the matching response; `events` streams pushed events.
+/// Async client for the daemon. `send` awaits the matching response; `events()` streams pushed events.
 public actor ControlClient {
     private let socketPath: String
     /// Singleton group: shared across clients, never shut down, so `close()` followed by a
@@ -14,32 +14,48 @@ public actor ControlClient {
     private var channel: Channel?
     private var nextID = 1
     private var pending: [Int: CheckedContinuation<ControlResult, Error>] = [:]
-    private let eventStream: AsyncStream<ControlEvent>
-    private let eventCont: AsyncStream<ControlEvent>.Continuation
-    /// Events pushed by the daemon. The stream outlives `close()` so a reconnect keeps delivering.
-    public nonisolated var events: AsyncStream<ControlEvent> { eventStream }
+    private var eventCont: AsyncStream<ControlEvent>.Continuation?
+    private var eventStream: AsyncStream<ControlEvent>?
     public private(set) var isConnected = false
 
     public init(socketPath: String) {
         self.socketPath = socketPath
-        (eventStream, eventCont) = AsyncStream<ControlEvent>.makeStream()
     }
 
-    deinit { eventCont.finish() }
+    /// Events pushed by the daemon over the current connection. The stream finishes when that
+    /// connection ends, so a caller looping over it can fall through to reconnect and call this
+    /// again for the next connection's stream. Returns a finished stream when not connected.
+    public func events() -> AsyncStream<ControlEvent> {
+        eventStream ?? AsyncStream { $0.finish() }
+    }
 
     public func connect() async throws {
+        if channel != nil { await close() }
+        let (stream, cont) = AsyncStream<ControlEvent>.makeStream()
+        eventStream = stream
+        eventCont = cont
         let bootstrap = ClientBootstrap(group: group).channelInitializer { ch in
-            ch.pipeline.addHandlers([ByteToMessageHandler(LineBasedFrameDecoder()), InboundHandler(client: self)])
+            ch.eventLoop.makeCompletedFuture {
+                try ch.pipeline.syncOperations.addHandlers([
+                    ByteToMessageHandler(LineBasedFrameDecoder(), maximumBufferSize: ControlServer.maximumFrameSize),
+                    InboundHandler(client: self),
+                ])
+            }
         }
-        channel = try await bootstrap.connect(unixDomainSocketPath: socketPath).get()
+        do {
+            channel = try await bootstrap.connect(unixDomainSocketPath: socketPath).get()
+        } catch {
+            endConnection()
+            throw error
+        }
         isConnected = true
     }
 
     public func close() async {
-        try? await channel?.close().get()
+        let old = channel
         channel = nil
-        isConnected = false
-        failPending()
+        try? await old?.close().get()
+        endConnection()
     }
 
     public func send(_ command: ControlCommand) async throws -> ControlResult {
@@ -66,25 +82,32 @@ public actor ControlClient {
         pending.removeValue(forKey: id)?.resume(throwing: error)
     }
 
-    fileprivate func receive(_ data: Data) {
+    fileprivate func receive(_ data: Data, from ch: Channel) {
+        guard ch === channel else { return }  // a line from a connection we already replaced
         guard let inbound = try? ControlInbound.decode(data) else { return }
         switch inbound {
         case .event(let e):
-            eventCont.yield(e)
+            eventCont?.yield(e)
         case .response(let r):
             guard let cont = pending.removeValue(forKey: r.id) else { return }
-            if r.ok, let res = r.result { cont.resume(returning: res) }
-            else { cont.resume(throwing: ControlClientError.remote(r.error ?? "unknown")) }
+            if !r.ok { cont.resume(throwing: ControlClientError.remote(r.error ?? "unknown")) }
+            else if let res = r.result { cont.resume(returning: res) }
+            else { cont.resume(throwing: ControlClientError.badResponse) }
         }
     }
 
-    fileprivate func disconnected() {
-        isConnected = false
+    fileprivate func disconnected(_ ch: Channel) {
+        guard ch === channel else { return }  // a previous connection going away after we moved on
         channel = nil
-        failPending()
+        endConnection()
     }
 
-    private func failPending() {
+    /// Tear down state tied to one connection: no more events, and nothing left awaiting a reply.
+    private func endConnection() {
+        isConnected = false
+        eventCont?.finish()
+        eventCont = nil
+        eventStream = nil
         for (_, c) in pending { c.resume(throwing: ControlClientError.notConnected) }
         pending.removeAll()
     }
@@ -98,10 +121,15 @@ private final class InboundHandler: ChannelInboundHandler, @unchecked Sendable {
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
         let bytes = Data(unwrapInboundIn(data).readableBytesView)
-        Task { await client.receive(bytes) }
+        let ch = context.channel
+        Task { await client.receive(bytes, from: ch) }
     }
 
-    func channelInactive(context: ChannelHandlerContext) { Task { await client.disconnected() } }
+    func channelInactive(context: ChannelHandlerContext) {
+        let ch = context.channel
+        Task { await client.disconnected(ch) }
+        context.fireChannelInactive()
+    }
 
     func errorCaught(context: ChannelHandlerContext, error: Error) { context.close(promise: nil) }
 }

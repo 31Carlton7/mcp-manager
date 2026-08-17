@@ -19,6 +19,7 @@ let package = Package(
         .target(name: "MCPMControl", dependencies: [
             "MCPMCore",
             .product(name: "NIO", package: "swift-nio"),
+            .product(name: "NIOConcurrencyHelpers", package: "swift-nio"),
             .product(name: "NIOExtras", package: "swift-nio-extras"),
         ]),
         .executableTarget(name: "mcpmd", dependencies: ["MCPMCore", "MCPMControl"]),

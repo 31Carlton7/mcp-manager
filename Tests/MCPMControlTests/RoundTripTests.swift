@@ -27,14 +27,15 @@ private func tempSocketPath() -> String {
     #expect(try await client.send(.status) == .status(status))
 
     // events
+    let events = await client.events()
     let evTask = Task { () -> [ControlEvent] in
         var got: [ControlEvent] = []
-        for await e in client.events { got.append(e); break }
+        for await e in events { got.append(e); break }
         return got
     }
     try await Task.sleep(for: .milliseconds(50))
     await server.broadcast(.status(status))
-    #expect(try await evTask.value == [.status(status)])
+    #expect(await evTask.value == [.status(status)])
 
     // error path
     await #expect(throws: ControlClientError.self) { try await client.send(.listServers) }
@@ -77,7 +78,7 @@ private func tempSocketPath() -> String {
     let sock = tempSocketPath()
     let server = ControlServer(socketPath: sock) { req in
         guard case .removeServer(let p) = req.command else { throw ControlServerError.unsupported(req.command.method) }
-        // Stagger completions so responses cannot come back in request order.
+        // Stagger handling so a request that is slow to answer cannot swallow another's reply.
         try await Task.sleep(for: .milliseconds(p.id == "slow" ? 60 : 1))
         return .servers([Server(id: p.id, name: p.id, kind: .stdio, source: "t", createdAt: Date())])
     }
@@ -94,4 +95,155 @@ private func tempSocketPath() -> String {
 
     await client.close()
     try await server.stop()
+}
+
+@Test func eventStreamEndsWithTheConnectionAndReconnectStartsAFreshOne() async throws {
+    let sock = tempSocketPath()
+    let status = DaemonStatus(daemonVersion: "t", apiVersion: 1, servers: [], clients: [])
+    let server = ControlServer(socketPath: sock) { _ in .ack }
+    try await server.start()
+    let client = ControlClient(socketPath: sock)
+    try await client.connect()
+
+    // A loop over the first connection's events must end when that connection dies,
+    // so a reconnect loop in the app can fall through instead of hanging forever.
+    let first = await client.events()
+    let drained = Task { () -> Int in
+        var n = 0
+        for await _ in first { n += 1 }
+        return n
+    }
+    try await Task.sleep(for: .milliseconds(50))
+    await server.broadcast(.status(status))
+    try await server.stop()
+    #expect(await drained.value == 1)
+
+    // Reconnecting yields a new, live stream.
+    try await server.start()
+    try await client.connect()
+    let second = await client.events()
+    let next = Task { () -> ControlEvent? in
+        for await e in second { return e }
+        return nil
+    }
+    try await Task.sleep(for: .milliseconds(50))
+    await server.broadcast(.status(status))
+    #expect(await next.value == .status(status))
+
+    await client.close()
+    try await server.stop()
+}
+
+@Test func eventsBeforeConnectingIsAFinishedStream() async throws {
+    let client = ControlClient(socketPath: tempSocketPath())
+    var count = 0
+    for await _ in await client.events() { count += 1 }
+    #expect(count == 0)
+}
+
+@Test func requestsFromOneConnectionAreHandledInOrder() async throws {
+    actor Recorder {
+        var ids: [Int] = []
+        func record(_ id: Int) { ids.append(id) }
+    }
+    let recorder = Recorder()
+    let sock = tempSocketPath()
+    let server = ControlServer(socketPath: sock) { req in
+        // Later requests are quicker to answer, so handling them concurrently would record
+        // them out of order. Sequential per-connection dispatch keeps ids increasing.
+        try await Task.sleep(for: .milliseconds(max(1, 21 - req.id)))
+        await recorder.record(req.id)
+        return .ack
+    }
+    try await server.start()
+    let client = ControlClient(socketPath: sock)
+    try await client.connect()
+
+    try await withThrowingTaskGroup(of: Void.self) { group in
+        for _ in 0..<20 { group.addTask { _ = try await client.send(.status) } }
+        try await group.waitForAll()
+    }
+
+    let ids = await recorder.ids
+    #expect(ids.count == 20)
+    #expect(ids == ids.sorted(), "handler saw ids out of order: \(ids)")
+
+    await client.close()
+    try await server.stop()
+}
+
+@Test func malformedLineIsRejectedAndTheConnectionKeepsWorking() async throws {
+    let sock = tempSocketPath()
+    let server = ControlServer(socketPath: sock) { _ in .ack }
+    try await server.start()
+
+    let raw = try RawConnection(path: sock)
+    defer { raw.close() }
+
+    try raw.writeLine("{not json")
+    let bad = try JSONDecoder.mcpm.decode(ControlResponse.self, from: Data(try #require(raw.readLine()).utf8))
+    #expect(bad.id == -1)
+    #expect(!bad.ok)
+    #expect(bad.error != nil)
+
+    try raw.writeLine(#"{"id":9,"method":"status"}"#)
+    let good = try JSONDecoder.mcpm.decode(ControlResponse.self, from: Data(try #require(raw.readLine()).utf8))
+    #expect(good.id == 9)
+    #expect(good.ok)
+    #expect(good.result == .ack)
+
+    try await server.stop()
+}
+
+/// A plain blocking Unix socket, so tests can put bytes on the wire that `ControlClient`
+/// would never produce. Reads time out after two seconds rather than hanging the suite.
+private struct RawConnection {
+    enum Failure: Error { case socket(Int32), connect(Int32), write(Int32) }
+
+    let fd: Int32
+
+    init(path: String) throws {
+        fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else { throw Failure.socket(errno) }
+
+        var timeout = timeval(tv_sec: 2, tv_usec: 0)
+        _ = setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+
+        var addr = sockaddr_un()
+        addr.sun_family = sa_family_t(AF_UNIX)
+        let bytes = Array(path.utf8)
+        withUnsafeMutableBytes(of: &addr.sun_path) { dst in
+            precondition(bytes.count < dst.count)
+            dst.copyBytes(from: bytes)
+            dst[bytes.count] = 0
+        }
+        let size = socklen_t(MemoryLayout<sockaddr_un>.size)
+        let rc = withUnsafePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, size) }
+        }
+        guard rc == 0 else { let e = errno; close(); throw Failure.connect(e) }
+    }
+
+    func writeLine(_ line: String) throws {
+        let bytes = Array((line + "\n").utf8)
+        var sent = 0
+        while sent < bytes.count {
+            let n = bytes.withUnsafeBytes { write(fd, $0.baseAddress! + sent, bytes.count - sent) }
+            guard n > 0 else { throw Failure.write(errno) }
+            sent += n
+        }
+    }
+
+    /// One newline-terminated line, or nil on timeout/EOF.
+    func readLine() -> String? {
+        var out = [UInt8]()
+        var byte: UInt8 = 0
+        while read(fd, &byte, 1) == 1 {
+            if byte == UInt8(ascii: "\n") { return String(decoding: out, as: UTF8.self) }
+            out.append(byte)
+        }
+        return nil
+    }
+
+    func close() { _ = Darwin.close(fd) }
 }

@@ -1,22 +1,32 @@
 import Foundation
 import NIO
+import NIOConcurrencyHelpers
 import NIOExtras
 import MCPMCore
 
-public enum ControlServerError: Error, Equatable { case unsupported(String) }
+public enum ControlServerError: Error, Equatable {
+    case unsupported(String)
+    case socketPermissions(Int32)
+}
 
 public typealias ControlHandler = @Sendable (ControlRequest) async throws -> ControlResult
 
 /// Newline-delimited JSON over a Unix domain socket. One handler serves all requests;
 /// `broadcast` pushes events to every open connection.
 public actor ControlServer {
+    /// Longest line the framer will buffer before tearing the connection down.
+    static let maximumFrameSize = 1 << 20
+
     private let socketPath: String
     private let handler: ControlHandler
     /// The process-wide singleton group: it never needs shutting down, so a server that is
     /// dropped without `stop()` leaves no threads behind, and `start()` works again after a stop.
     private let group = MultiThreadedEventLoopGroup.singleton
     private var channel: Channel?
-    private var connections: [ObjectIdentifier: Channel] = [:]
+    /// Held under a lock rather than in actor state so that `channelActive`/`channelInactive`
+    /// register and unregister synchronously — hopping onto the actor lets a late `unregister`
+    /// for a dead channel land after a new one registered, leaking the dead channel.
+    private nonisolated let connections = NIOLockedValueBox<[ObjectIdentifier: Channel]>([:])
 
     public init(socketPath: String, handler: @escaping ControlHandler) {
         self.socketPath = socketPath
@@ -28,18 +38,27 @@ public actor ControlServer {
         let bootstrap = ServerBootstrap(group: group)
             .serverChannelOption(ChannelOptions.backlog, value: 16)
             .childChannelInitializer { ch in
-                ch.pipeline.addHandlers([
-                    ByteToMessageHandler(LineBasedFrameDecoder()),
-                    ConnectionHandler(server: self),
-                ])
+                // syncOperations rather than `pipeline.addHandlers`: the handlers are not Sendable
+                // and this closure already runs on the channel's event loop.
+                ch.eventLoop.makeCompletedFuture {
+                    try ch.pipeline.syncOperations.addHandlers([
+                        ByteToMessageHandler(LineBasedFrameDecoder(), maximumBufferSize: Self.maximumFrameSize),
+                        ConnectionHandler(server: self),
+                    ])
+                }
             }
         channel = try await bootstrap.bind(unixDomainSocketPath: socketPath).get()
-        _ = chmod(socketPath, 0o600)
+        guard chmod(socketPath, 0o600) == 0 else {
+            let code = errno
+            try? await stop()
+            throw ControlServerError.socketPermissions(code)
+        }
     }
 
     public func stop() async throws {
-        for c in connections.values { try? await c.close().get() }
-        connections.removeAll()
+        for c in connections.withLockedValue({ let all = $0; $0.removeAll(); return all }).values {
+            try? await c.close().get()
+        }
         try? await channel?.close().get()
         channel = nil
         try? FileManager.default.removeItem(atPath: socketPath)
@@ -47,11 +66,16 @@ public actor ControlServer {
 
     public func broadcast(_ event: ControlEvent) {
         guard let data = try? JSONEncoder.mcpmWire.encode(event) else { return }
-        for c in connections.values { Self.writeLine(data, to: c) }
+        for c in connections.withLockedValue({ $0 }).values { Self.writeLine(data, to: c) }
     }
 
-    fileprivate func register(_ c: Channel) { connections[ObjectIdentifier(c)] = c }
-    fileprivate func unregister(_ c: Channel) { connections[ObjectIdentifier(c)] = nil }
+    fileprivate nonisolated func register(_ c: Channel) {
+        connections.withLockedValue { $0[ObjectIdentifier(c)] = c }
+    }
+
+    fileprivate nonisolated func unregister(_ c: Channel) {
+        connections.withLockedValue { $0[ObjectIdentifier(c)] = nil }
+    }
 
     fileprivate func handleLine(_ data: Data, on c: Channel) async {
         let response: ControlResponse
@@ -73,26 +97,39 @@ public actor ControlServer {
     }
 }
 
+/// Feeds each connection's lines through one stream with a single consumer, so requests from a
+/// connection are handled in the order they were sent even though handling is async.
 private final class ConnectionHandler: ChannelInboundHandler, @unchecked Sendable {
     typealias InboundIn = ByteBuffer
 
     let server: ControlServer
-    init(server: ControlServer) { self.server = server }
+    private let lines: AsyncStream<Data>
+    private let lineCont: AsyncStream<Data>.Continuation
+    private var consumer: Task<Void, Never>?
+
+    init(server: ControlServer) {
+        self.server = server
+        (lines, lineCont) = AsyncStream<Data>.makeStream()
+    }
 
     func channelActive(context: ChannelHandlerContext) {
         let ch = context.channel
-        Task { await server.register(ch) }
+        server.register(ch)
+        let lines = self.lines
+        consumer = Task { [server] in
+            for await line in lines { await server.handleLine(line, on: ch) }
+        }
+        context.fireChannelActive()
     }
 
     func channelInactive(context: ChannelHandlerContext) {
-        let ch = context.channel
-        Task { await server.unregister(ch) }
+        server.unregister(context.channel)
+        lineCont.finish()
+        context.fireChannelInactive()
     }
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
-        let bytes = Data(unwrapInboundIn(data).readableBytesView)
-        let ch = context.channel
-        Task { await server.handleLine(bytes, on: ch) }
+        lineCont.yield(Data(unwrapInboundIn(data).readableBytesView))
     }
 
     func errorCaught(context: ChannelHandlerContext, error: Error) { context.close(promise: nil) }
