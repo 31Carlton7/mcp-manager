@@ -93,6 +93,14 @@ extension JSONEncoder {
         e.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         return e
     }
+
+    /// Single-line encoder for wire protocols, where a newline terminates a message.
+    public static var mcpmWire: JSONEncoder {
+        let e = JSONEncoder()
+        e.dateEncodingStrategy = .iso8601
+        e.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return e
+    }
 }
 extension JSONDecoder {
     public static var mcpm: JSONDecoder {
