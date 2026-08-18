@@ -99,7 +99,12 @@ final class DaemonClient {
     /// waits on the authorization server, a test that dials the server itself. On the ordered
     /// connection those would hold every toggle behind them.
     private let aux: ControlClient
-    private var auxConnected = false
+    /// The in-flight or settled connect for the aux link, shared by everyone who needs it, and nil
+    /// whenever the link is down.
+    private var auxConnect: Task<Void, Error>?
+    /// Which aux connection is current. A drain or a failed send only takes the link down if it is
+    /// still talking about the connection we actually have.
+    private var auxGeneration = 0
     private var connectTask: Task<Void, Never>?
     private var commandTask: Task<Void, Never>?
     private var inFlight = 0
@@ -268,23 +273,57 @@ final class DaemonClient {
     /// — the `auth` switch a sign-in depends on — has already been applied.
     private func auxSend(_ cmd: ControlCommand) async throws -> ControlResult {
         _ = try await send(.status)
+        let generation = auxGeneration
         do {
             return try await auxRequest(cmd)
         } catch {
             // The daemon answered and said no; asking again would only hear it twice.
             if case ControlClientError.remote = error { throw error }
-            // Otherwise the connection went away under us — this one carries no event stream, so a
-            // failed send is the only place we find that out.
-            auxConnected = false
+            // Otherwise the link died in the gap between the send leaving and the drain noticing.
+            // Guarded by the generation, so this can't drop a connection someone else just made.
+            auxDisconnected(generation)
             return try await auxRequest(cmd)
         }
     }
 
     private func auxRequest(_ cmd: ControlCommand) async throws -> ControlResult {
-        if !auxConnected {
-            try await aux.connect()
-            auxConnected = true
-        }
+        try await auxReady()
         return try await aux.send(cmd)
+    }
+
+    /// Connects the aux link if it isn't up, with concurrent callers sharing the one attempt:
+    /// `ControlClient.connect()` closes whatever is open before dialling, so two of them racing
+    /// would tear each other's connection down and neither would settle.
+    private func auxReady() async throws {
+        let connect = auxConnect ?? startAuxConnect()
+        do {
+            try await connect.value
+        } catch {
+            if auxConnect == connect { auxConnect = nil }
+            throw error
+        }
+    }
+
+    private func startAuxConnect() -> Task<Void, Error> {
+        auxGeneration += 1
+        let generation = auxGeneration
+        let connect = Task { [aux] in
+            try await aux.connect()
+            // Nobody here wants this connection's events, but an unread `AsyncStream` keeps every
+            // status the daemon ever pushes — so they are read and dropped. The stream ends with
+            // the connection, which is also how this side learns the link is gone.
+            Task { [weak self] in
+                for await _ in await aux.events() {}
+                self?.auxDisconnected(generation)
+            }
+        }
+        auxConnect = connect
+        return connect
+    }
+
+    /// Marks the aux link down, unless it has already been replaced by a newer one.
+    private func auxDisconnected(_ generation: Int) {
+        guard generation == auxGeneration else { return }
+        auxConnect = nil
     }
 }
