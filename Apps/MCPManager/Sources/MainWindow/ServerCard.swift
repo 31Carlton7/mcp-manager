@@ -83,6 +83,11 @@ struct ServerCard: View {
                 .font(Typography.caption)
                 .foregroundStyle(.yellow)
                 .lineLimit(1)
+        } else if status.authStatus == .error {
+            Text("sign-in error")
+                .font(Typography.caption)
+                .foregroundStyle(.red)
+                .lineLimit(1)
         } else {
             HStack(spacing: Space.xs) {
                 Text(status.server.subline)

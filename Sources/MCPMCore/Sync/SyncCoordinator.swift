@@ -99,12 +99,17 @@ public actor SyncCoordinator {
     /// Apply a change to the library, then sync it out. The library change is intentional, so the
     /// "client wins on presence" rule is skipped for this pass (otherwise enabling a server for a
     /// client whose file doesn't have it yet would be immediately undone).
-    public func mutate(_ f: (inout Library) throws -> Void) async throws {
+    ///
+    /// The closure's return value comes back to the caller, so a mutation that mints something —
+    /// an id, say — can hand it out without a second read that another mutation could slip into.
+    @discardableResult
+    public func mutate<T: Sendable>(_ f: (inout Library) throws -> T) async throws -> T {
         guard loaded else { throw SyncCoordinatorError.notLoaded }
         let before = library
-        try f(&library)
+        let result = try f(&library)
         try store.save(library)
         _ = try sync(skipPresence: true, alreadyChanged: library != before)
+        return result
     }
 
     /// `alreadyChanged` reports an edit made to `library` before this pass, so listeners still hear

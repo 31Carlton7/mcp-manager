@@ -95,6 +95,11 @@ final class DaemonClient {
 
     private let appVersion: String
     private let client: ControlClient
+    /// A second connection on the same socket, for the calls that can take seconds — a sign-in that
+    /// waits on the authorization server, a test that dials the server itself. On the ordered
+    /// connection those would hold every toggle behind them.
+    private let aux: ControlClient
+    private var auxConnected = false
     private var connectTask: Task<Void, Never>?
     private var commandTask: Task<Void, Never>?
     private var inFlight = 0
@@ -108,6 +113,7 @@ final class DaemonClient {
             ?? (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String)
             ?? "0.1.0"
         client = ControlClient(socketPath: socketPath)
+        aux = ControlClient(socketPath: socketPath)
         (commands, commandCont) = AsyncStream<Queued>.makeStream()
     }
 
@@ -206,10 +212,16 @@ final class DaemonClient {
     func startAuth(_ id: String) {
         Task { [weak self] in
             guard let self else { return }
-            // A failure is already on `lastError`, put there by the drain, and the banner shows it.
-            guard case .authorizeURL(let raw) = try? await send(.authStart(.init(id: id))),
-                  let url = URL(string: raw) else { return }
-            NSWorkspace.shared.open(url)
+            do {
+                guard case .authorizeURL(let raw) = try await auxSend(.authStart(.init(id: id))) else { return }
+                guard let url = URL(string: raw) else {
+                    lastError = "The background service returned an authorization URL we can't open"
+                    return
+                }
+                NSWorkspace.shared.open(url)
+            } catch {
+                lastError = String(describing: error)
+            }
         }
     }
 
@@ -229,7 +241,7 @@ final class DaemonClient {
         testing.insert(id)
         defer { testing.remove(id) }
         do {
-            if case .testResult(let r) = try await send(.testServer(.init(id: id))) {
+            if case .testResult(let r) = try await auxSend(.testServer(.init(id: id))) {
                 testResults[id] = r
             }
         } catch {
@@ -249,5 +261,30 @@ final class DaemonClient {
         return try await withCheckedThrowingContinuation { cont in
             commandCont.yield(Queued(command: cmd, keys: [], reply: cont))
         }
+    }
+
+    /// A slow call, off the ordered connection. The cheap `status` first is the barrier: it is the
+    /// last thing in the ordered queue, so when it answers, every mutation issued before this call
+    /// — the `auth` switch a sign-in depends on — has already been applied.
+    private func auxSend(_ cmd: ControlCommand) async throws -> ControlResult {
+        _ = try await send(.status)
+        do {
+            return try await auxRequest(cmd)
+        } catch {
+            // The daemon answered and said no; asking again would only hear it twice.
+            if case ControlClientError.remote = error { throw error }
+            // Otherwise the connection went away under us — this one carries no event stream, so a
+            // failed send is the only place we find that out.
+            auxConnected = false
+            return try await auxRequest(cmd)
+        }
+    }
+
+    private func auxRequest(_ cmd: ControlCommand) async throws -> ControlResult {
+        if !auxConnected {
+            try await aux.connect()
+            auxConnected = true
+        }
+        return try await aux.send(cmd)
     }
 }

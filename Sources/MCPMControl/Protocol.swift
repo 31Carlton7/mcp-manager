@@ -45,15 +45,23 @@ public struct AddServerParams: Codable, Equatable, Sendable {
     public var headers: [String: String]
     public var auth: AuthKind
     public var clients: [ClientID: Bool]
+    /// The credential for `auth: .header`, sent with the add rather than after it: the id is the
+    /// daemon's to mint, and a client guessing it to follow up with `auth.setHeader` would guess
+    /// wrong the moment two adds raced. Never stored in the library — the daemon puts it straight
+    /// into the credential store.
+    public var headerName: String?
+    public var headerValue: String?
+
     public init(name: String, kind: ServerKind, command: String? = nil, args: [String] = [], env: [String: String] = [:],
                 url: String? = nil, headers: [String: String] = [:], auth: AuthKind = .none,
-                clients: [ClientID: Bool] = [:]) {
+                clients: [ClientID: Bool] = [:], headerName: String? = nil, headerValue: String? = nil) {
         self.name = name; self.kind = kind; self.command = command; self.args = args; self.env = env
         self.url = url; self.headers = headers; self.auth = auth; self.clients = clients
+        self.headerName = headerName; self.headerValue = headerValue
     }
 
-    /// `headers` arrived after the first release, so it decodes as optional: an older app talking to
-    /// a newer daemon still sends requests without the key.
+    /// `headers` and the header credential arrived after the first release, so they decode as
+    /// optional: an older app talking to a newer daemon still sends requests without the keys.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         name = try c.decode(String.self, forKey: .name)
@@ -65,6 +73,8 @@ public struct AddServerParams: Codable, Equatable, Sendable {
         headers = try c.decodeIfPresent([String: String].self, forKey: .headers) ?? [:]
         auth = try c.decode(AuthKind.self, forKey: .auth)
         clients = try c.decode([ClientID: Bool].self, forKey: .clients)
+        headerName = try c.decodeIfPresent(String.self, forKey: .headerName)
+        headerValue = try c.decodeIfPresent(String.self, forKey: .headerValue)
     }
 }
 

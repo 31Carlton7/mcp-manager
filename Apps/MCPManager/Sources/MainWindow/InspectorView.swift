@@ -20,6 +20,11 @@ struct InspectorView: View {
     /// show what is stored.
     @State private var headerName = "Authorization"
     @State private var headerValue = ""
+    /// What the segmented control shows. Held locally so it moves on the click rather than a round
+    /// trip later, and re-synced from the daemon whenever it answers.
+    @State private var authSelection: AuthKind = .none
+    /// A switch that would sign the user out, waiting on them to say so.
+    @State private var confirmAuth: AuthKind?
 
     /// Identity that survives editing: keying rows by their name would renumber the list mid-word.
     private struct EnvRow: Identifiable {
@@ -42,6 +47,9 @@ struct InspectorView: View {
             }
         }
         .onChange(of: serverID, initial: true) { loadFields() }
+        // The picker is optimistic, so the daemon's answer — the change landing, or the server
+        // being edited from somewhere else — is what puts it right again.
+        .onChange(of: status?.server.auth) { _, new in authSelection = new ?? .none }
     }
 
     private func detail(_ status: ServerStatus) -> some View {
@@ -123,8 +131,8 @@ struct InspectorView: View {
                 sectionLabel("Auth")
                 stateLine(status)
                 Picker("Auth", selection: Binding(
-                    get: { status.server.auth },
-                    set: { daemon.updateAuth(status.server.id, $0) })) {
+                    get: { authSelection },
+                    set: { pick($0, for: status) })) {
                         Text("None").tag(AuthKind.none)
                         Text("OAuth").tag(AuthKind.oauth)
                         Text("Header").tag(AuthKind.header)
@@ -132,6 +140,10 @@ struct InspectorView: View {
                     .pickerStyle(.segmented)
                     .controlSize(.small)
                     .labelsHidden()
+                Text("Switching auth kind removes stored credentials")
+                    .font(Typography.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 switch status.server.auth {
                 case .none: EmptyView()
                 case .oauth: oauthControls(status)
@@ -139,6 +151,29 @@ struct InspectorView: View {
                 }
                 gatewayCaption(status)
             }
+            .confirmationDialog("Switch auth kind?", isPresented: confirming, presenting: confirmAuth) { kind in
+                Button("Sign out and switch", role: .destructive) {
+                    daemon.updateAuth(status.server.id, kind)
+                }
+                Button("Cancel", role: .cancel) { authSelection = status.server.auth }
+            } message: { _ in
+                Text("Switching auth signs you out of \(status.server.name).")
+            }
+        }
+    }
+
+    private var confirming: Binding<Bool> {
+        Binding(get: { confirmAuth != nil }, set: { if !$0 { confirmAuth = nil } })
+    }
+
+    /// A switch away from a working sign-in throws the credential away, so it asks first. Every
+    /// other switch has nothing to lose and goes straight through.
+    private func pick(_ kind: AuthKind, for status: ServerStatus) {
+        guard kind != status.server.auth else { return }
+        authSelection = kind
+        switch status.authStatus {
+        case .connected, .expiring: confirmAuth = kind
+        case .none, .needsAuth, .error: daemon.updateAuth(status.server.id, kind)
         }
     }
 
@@ -395,6 +430,8 @@ struct InspectorView: View {
         envRows = (status?.server.env ?? [:]).sorted { $0.key < $1.key }.map { EnvRow(key: $0.key, value: $0.value) }
         headerName = "Authorization"
         headerValue = ""
+        authSelection = status?.server.auth ?? .none
+        confirmAuth = nil
     }
 
     private func commitArgs(_ status: ServerStatus) {

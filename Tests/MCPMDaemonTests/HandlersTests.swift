@@ -127,6 +127,50 @@ func aHeaderThatCannotGoOnTheWireIsRejected(name: String, value: String) async t
     }
 }
 
+/// The credential rides along with the add so the caller never has to guess the id the daemon is
+/// about to mint — the whole point of carrying it in `servers.add`.
+@Test func anAddCarryingAHeaderCredentialStoresItAgainstTheMintedID() async throws {
+    let e = try await makeEnv()
+    // Two servers wanting the same slug: the second gets "acme-2", which a caller predicting ids
+    // from the name alone would have got wrong.
+    try await add(remoteServer(name: "acme", auth: .none), to: e.handlers)
+    var p = remoteServer(name: "acme", auth: .header)
+    p.headerName = "X-Api-Key"
+    p.headerValue = "s3cret"
+    try await add(p, to: e.handlers)
+
+    #expect(try e.store.header(for: "acme") == nil)
+    #expect(try e.store.header(for: "acme-2")?.name == "X-Api-Key")
+    #expect(try e.store.header(for: "acme-2")?.value == "s3cret")
+    #expect(await state(of: "acme-2", in: e.handlers) == "connected")
+}
+
+@Test(arguments: [("X Api Key", "v"), ("X-Api-Key", "one\r\nInjected: two")])
+func anAddWithAnUnsendableHeaderAddsNothingAtAll(name: String, value: String) async throws {
+    let e = try await makeEnv()
+    var p = remoteServer(name: "acme", auth: .header)
+    p.headerName = name
+    p.headerValue = value
+
+    await #expect(throws: HandlerError.self) {
+        try await e.handlers.handle(ControlRequest(id: 1, command: .addServer(p)))
+    }
+    #expect(await e.handlers.status().servers.isEmpty)
+    #expect(try e.store.header(for: "acme") == nil)
+}
+
+@Test func anAddCarryingACredentialForNonHeaderAuthIsRejected() async throws {
+    let e = try await makeEnv()
+    var p = remoteServer(name: "acme", auth: .oauth)
+    p.headerName = "X-Api-Key"
+    p.headerValue = "v"
+
+    await #expect(throws: HandlerError.self) {
+        try await e.handlers.handle(ControlRequest(id: 1, command: .addServer(p)))
+    }
+    #expect(await e.handlers.status().servers.isEmpty)
+}
+
 /// The static headers a client writes into its own config, as opposed to the credential the
 /// gateway injects — the inspector edits these for a plain remote server.
 @Test func updateCanReplaceStaticHeaders() async throws {

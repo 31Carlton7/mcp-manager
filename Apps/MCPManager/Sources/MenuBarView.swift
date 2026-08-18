@@ -181,18 +181,7 @@ struct MenuBarView: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
             if st.authStatus == .needsAuth {
-                Button("Sign in") { daemon.startAuth(st.server.id) }
-                    .buttonStyle(.pressable)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.yellow)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(.yellow.opacity(0.18), in: .capsule)
-                    .contentShape(.capsule)
-                    .disabled(daemon.gatewayPort == nil)
-                    .help(daemon.gatewayPort == nil
-                          ? "Gateway not running — auth unavailable"
-                          : "Opens your browser to sign in to \(st.server.name)")
+                signIn(st)
             }
             Spacer(minLength: Space.s)
             Toggle(st.server.name, isOn: enabled(st.server))
@@ -204,6 +193,32 @@ struct MenuBarView: View {
         // The "Sign in" badge appears and disappears with the daemon's status pushes, so it fades
         // rather than popping into the middle of the row.
         .animation(.snappy(duration: 0.2), value: st.state)
+    }
+
+    /// The one row-level action there is. With no gateway there is nothing to sign in to, and a
+    /// disabled control can't be hovered for an explanation — so the row says why in the open.
+    @ViewBuilder private func signIn(_ st: ServerStatus) -> some View {
+        let off = daemon.gatewayPort == nil
+        Button {
+            daemon.startAuth(st.server.id)
+        } label: {
+            HStack(spacing: 3) {
+                Text("Sign in")
+                if off {
+                    Text("(gateway off)").foregroundStyle(.secondary)
+                }
+            }
+            .font(.system(size: 10, weight: .medium))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(.yellow.opacity(off ? 0.08 : 0.18), in: .capsule)
+            .contentShape(.capsule)
+        }
+        .buttonStyle(.pressable)
+        .foregroundStyle(off ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.yellow))
+        .disabled(off)
+        .accessibilityLabel(off ? "Sign in unavailable, gateway off"
+                                : "Sign in to \(st.server.name)")
     }
 
     /// One switch, two meanings: with no filter it is the master switch for every installed

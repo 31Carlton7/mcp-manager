@@ -41,6 +41,7 @@ struct AddServerSheet: View {
     private var single: ExternalServer? { parsed.servers.count == 1 ? parsed.servers[0] : nil }
 
     private var trimmedName: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var trimmedHeaderName: String { headerName.trimmingCharacters(in: .whitespaces) }
 
     private var canAdd: Bool {
         guard !parsed.servers.isEmpty else { return false }
@@ -344,10 +345,11 @@ struct AddServerSheet: View {
     /// server that was just pasted rather than anything the user has committed to.
     private func reparse() {
         parsed = SmartPasteParser.parse(paste)
+        // Auth is only ever offered for a single remote server: stdio has nowhere to put gateway
+        // auth, and a batch paste has no per-server form, so neither may inherit a picker the user
+        // set against something else.
+        if single == nil || single?.kind == .stdio { auth = .none }
         guard let single else { return }
-        // A pasted command line is a stdio server, and stdio has nowhere to put gateway auth — so a
-        // picker the user set before pasting doesn't survive into a server the daemon would reject.
-        if single.kind == .stdio { auth = .none }
         if !nameEdited { name = single.name }
         argsText = single.args.joined(separator: " ")
         envRows = single.env.sorted { $0.key < $1.key }.map { KeyValueRow(key: $0.key, value: $0.value) }
@@ -356,15 +358,8 @@ struct AddServerSheet: View {
 
     private func add() {
         let enabled = Dictionary(uniqueKeysWithValues: clients.map { ($0, true) })
-        // The id the daemon is about to mint, by its own rule: a slug of the name, made unique
-        // against the library we can see. Worked out before the add so the credential that follows
-        // it names the right server; the commands are queued in order, so it arrives after.
-        let newID = Slug.unique(Slug.make(trimmedName), existing: Set(daemon.servers.map(\.id)))
         for server in parsed.servers {
             daemon.add(params(for: server, clients: enabled))
-        }
-        if single != nil, auth == .header, !headerName.isEmpty, !headerValue.isEmpty {
-            daemon.setHeader(newID, name: headerName.trimmingCharacters(in: .whitespaces), value: headerValue)
         }
         dismiss()
     }
@@ -377,12 +372,18 @@ struct AddServerSheet: View {
                                    args: server.args, env: server.env, url: server.url,
                                    headers: server.headers, auth: .none, clients: clients)
         }
+        let kind = server.kind == .remote ? auth : .none
+        // The credential travels with the add: the daemon mints the id, so it is the only one that
+        // can name the server the credential belongs to.
+        let credential = kind == .header && !trimmedHeaderName.isEmpty && !headerValue.isEmpty
         return AddServerParams(name: trimmedName, kind: server.kind, command: server.command,
                                args: server.kind == .stdio ? SmartPasteParser.shellSplit(argsText) : [],
                                env: server.kind == .stdio ? dictionary(envRows) : [:],
                                url: server.url,
                                headers: server.kind == .remote ? dictionary(headerRows) : [:],
-                               auth: server.kind == .remote ? auth : .none, clients: clients)
+                               auth: kind, clients: clients,
+                               headerName: credential ? trimmedHeaderName : nil,
+                               headerValue: credential ? headerValue : nil)
     }
 
     /// Rows with a blank key are the half-typed ones; they are dropped rather than sent as "".

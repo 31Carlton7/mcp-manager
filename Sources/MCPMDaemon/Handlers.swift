@@ -74,11 +74,18 @@ public struct Handlers: Sendable {
             return .clients(await status().clients)
         case .addServer(let p):
             try validate(p)
-            try await coord.mutate { lib in
+            // Before the mutate, so a malformed header doesn't leave a server behind that the
+            // caller was told wasn't added.
+            let credential = try headerCredential(p)
+            let id = try await coord.mutate { lib in
                 let id = Slug.unique(Slug.make(p.name), existing: Set(lib.servers.map(\.id)))
                 lib.servers.append(Server(id: id, name: p.name, kind: p.kind, command: p.command, args: p.args,
                                           env: p.env, url: p.url, headers: p.headers, auth: p.auth, clients: p.clients,
                                           source: "manual", createdAt: .init()))
+                return id
+            }
+            if let credential {
+                try await auth.setHeader(id: id, name: credential.name, value: credential.value)
             }
             return .ack
         case .updateServer(let p):
@@ -157,6 +164,24 @@ public struct Handlers: Sendable {
             try await auth.setHeader(id: s.id, name: p.name, value: p.value)
             return .ack
         }
+    }
+
+    /// The header credential carried by an add, validated here so `servers.add` either produces a
+    /// server with its credential in place or produces nothing at all. A credential sent for a
+    /// server that isn't on header auth is refused rather than quietly stored: it would sit in the
+    /// Keychain unused until the day someone switched the auth kind.
+    private func headerCredential(_ p: AddServerParams) throws -> (name: String, value: String)? {
+        guard let name = p.headerName, let value = p.headerValue else {
+            guard p.headerName == nil, p.headerValue == nil else {
+                throw HandlerError.invalid("a header credential needs both a name and a value")
+            }
+            return nil
+        }
+        guard p.auth == .header else {
+            throw HandlerError.invalid("a header credential needs auth: header")
+        }
+        try validateHeader(name: name, value: value)
+        return (name, value)
     }
 
     /// A pasted header goes onto the wire verbatim. RFC 7230 says a field name is a token and a
