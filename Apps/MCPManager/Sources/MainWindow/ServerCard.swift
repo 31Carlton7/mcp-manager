@@ -78,17 +78,27 @@ struct ServerCard: View {
     }
 
     @ViewBuilder private var subline: some View {
-        if status.state == "needsAuth" {
+        if status.authStatus == .needsAuth {
             Text("needs sign-in")
                 .font(Typography.caption)
                 .foregroundStyle(.yellow)
                 .lineLimit(1)
         } else {
-            Text(status.server.subline)
-                .font(Typography.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
+            HStack(spacing: Space.xs) {
+                Text(status.server.subline)
+                    .font(Typography.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                // Signed in and working. A dot rather than a word, because the card's job is to say
+                // which server this is and the subline already carries the sentence.
+                if status.authStatus == .connected {
+                    Circle()
+                        .fill(.green)
+                        .frame(width: 5, height: 5)
+                        .accessibilityLabel("Signed in")
+                }
+            }
         }
     }
 

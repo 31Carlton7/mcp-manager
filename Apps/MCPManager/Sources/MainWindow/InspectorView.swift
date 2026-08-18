@@ -15,6 +15,11 @@ struct InspectorView: View {
     @State private var envRows: [EnvRow] = []
     @State private var advanced = false
     @State private var showRemove = false
+    /// The header credential is write-only: the daemon keeps the value in the Keychain and never
+    /// hands it back, so these fields start empty on every selection rather than pretending to
+    /// show what is stored.
+    @State private var headerName = "Authorization"
+    @State private var headerValue = ""
 
     /// Identity that survives editing: keying rows by their name would renumber the list mid-word.
     private struct EnvRow: Identifiable {
@@ -46,6 +51,7 @@ struct InspectorView: View {
                     header(status)
                     enabledIn(status)
                     connection(status)
+                    authSection(status)
                     advancedSection(status)
                 }
                 .padding(Space.l)
@@ -103,10 +109,121 @@ struct InspectorView: View {
                 .textSelection(.enabled)
                 .lineLimit(4)
                 .fixedSize(horizontal: false, vertical: true)
-            Text(authLine(status))
-                .font(Typography.caption)
-                .foregroundStyle(status.state == "needsAuth" ? AnyShapeStyle(Color.yellow) : AnyShapeStyle(.secondary))
         }
+    }
+
+    // MARK: auth
+
+    /// Only remote servers have anything to say here: a stdio server's credentials live in its
+    /// environment, there is no gateway hop to hang a token off, and the daemon rejects the
+    /// combination outright.
+    @ViewBuilder private func authSection(_ status: ServerStatus) -> some View {
+        if status.server.kind == .remote {
+            VStack(alignment: .leading, spacing: Space.s) {
+                sectionLabel("Auth")
+                stateLine(status)
+                Picker("Auth", selection: Binding(
+                    get: { status.server.auth },
+                    set: { daemon.updateAuth(status.server.id, $0) })) {
+                        Text("None").tag(AuthKind.none)
+                        Text("OAuth").tag(AuthKind.oauth)
+                        Text("Header").tag(AuthKind.header)
+                    }
+                    .pickerStyle(.segmented)
+                    .controlSize(.small)
+                    .labelsHidden()
+                switch status.server.auth {
+                case .none: EmptyView()
+                case .oauth: oauthControls(status)
+                case .header: headerControls(status)
+                }
+                gatewayCaption(status)
+            }
+        }
+    }
+
+    private func stateLine(_ status: ServerStatus) -> some View {
+        let state = status.authStatus
+        return HStack(spacing: 6) {
+            Circle()
+                .fill(state.color)
+                .frame(width: 6, height: 6)
+            Text(state.label)
+                .font(Typography.caption)
+                .foregroundStyle(.secondary)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Auth: \(state.label)")
+    }
+
+    @ViewBuilder private func oauthControls(_ status: ServerStatus) -> some View {
+        HStack(spacing: Space.xs) {
+            switch status.authStatus {
+            case .connected, .expiring:
+                Button("Sign out") { daemon.signOut(status.server.id) }
+                // Forgetting also drops the client registration, which is the fix for a server that
+                // has forgotten us — rare enough that it doesn't belong next to Sign out.
+                Menu {
+                    Button("Forget registration") { daemon.forget(status.server.id) }
+                } label: {
+                    Image(systemName: "ellipsis")
+                }
+                .menuStyle(.button)
+                .buttonStyle(.borderless)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .accessibilityLabel("More auth actions")
+            case .none, .needsAuth, .error:
+                Button("Sign in…") { daemon.startAuth(status.server.id) }
+                    .disabled(daemon.gatewayPort == nil)
+                    .help("Opens your browser to finish the sign-in")
+            }
+            Spacer(minLength: 0)
+        }
+        .font(Typography.body)
+    }
+
+    private func headerControls(_ status: ServerStatus) -> some View {
+        VStack(alignment: .leading, spacing: Space.xs) {
+            TextField("Header", text: $headerName)
+                .onSubmit { saveHeader(status) }
+            SecureField("value", text: $headerValue)
+                .onSubmit { saveHeader(status) }
+            HStack {
+                Spacer(minLength: 0)
+                Button("Save") { saveHeader(status) }
+                    .font(Typography.body)
+                    .disabled(headerName.isEmpty || headerValue.isEmpty)
+            }
+        }
+        .textFieldStyle(.roundedBorder)
+        .font(.system(size: 11, design: .monospaced))
+    }
+
+    /// Says where the clients are actually being pointed, since with auth on they no longer talk to
+    /// the server's own URL — and says so loudly when there is nothing listening there.
+    @ViewBuilder private func gatewayCaption(_ status: ServerStatus) -> some View {
+        if status.server.auth != .none {
+            if let port = daemon.gatewayPort {
+                Text("Clients will be pointed at the local gateway (localhost:\(String(port))).")
+                    .font(Typography.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text("Gateway not running — auth unavailable")
+                    .font(Typography.caption)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func saveHeader(_ status: ServerStatus) {
+        let name = headerName.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty, !headerValue.isEmpty else { return }
+        daemon.setHeader(status.server.id, name: name, value: headerValue)
+        // The value is in the Keychain now; keeping a copy on screen would only be a copy to leak.
+        headerValue = ""
     }
 
     @ViewBuilder private func advancedSection(_ status: ServerStatus) -> some View {
@@ -183,22 +300,34 @@ struct InspectorView: View {
                     .font(.system(size: 11, design: .monospaced))
                 }
             }
-            Text("Header editing arrives with the auth gateway")
+            Text(status.server.auth == .none
+                 ? "Written into every client's config. A credential belongs in Auth instead."
+                 : "Not written to clients while auth is on — the gateway adds its own.")
                 .font(Typography.caption)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
     private func footer(_ status: ServerStatus) -> some View {
-        HStack {
-            Button("Test") {}
-                .disabled(true)
-                .help("Available in a later version")
-            Spacer(minLength: Space.s)
-            Button("Remove", role: .destructive) { showRemove = true }
+        let running = daemon.testing.contains(status.server.id)
+        return VStack(alignment: .leading, spacing: Space.xs) {
+            testResult(status)
+            HStack {
+                Button("Test") { Task { await daemon.test(status.server.id) } }
+                    .disabled(running)
+                if running {
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityLabel("Testing")
+                }
+                Spacer(minLength: Space.s)
+                Button("Remove", role: .destructive) { showRemove = true }
+            }
         }
         .font(Typography.body)
         .padding(Space.m)
+        .animation(.snappy(duration: 0.2), value: running)
         .confirmationDialog("Remove server?", isPresented: $showRemove) {
             Button("Remove \(status.server.name)", role: .destructive) {
                 daemon.remove(status.server.id)
@@ -208,6 +337,37 @@ struct InspectorView: View {
         } message: {
             Text("Remove \(status.server.name) from all clients?")
         }
+    }
+
+    /// The last test for this server, if it has been tested since the app started. It stays until
+    /// the next test replaces it — a result is about a moment, and saying which moment is the
+    /// timing in it.
+    @ViewBuilder private func testResult(_ status: ServerStatus) -> some View {
+        if let result = daemon.testResults[status.server.id] {
+            Text(result.ok ? summary(result) : failure(result))
+                .font(Typography.caption)
+                .foregroundStyle(result.ok ? Color.green : Color.red)
+                .lineLimit(3)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func summary(_ r: TestResult) -> String {
+        var parts: [String] = []
+        let who = [r.serverName, r.serverVersion].compactMap { $0 }.joined(separator: " ")
+        parts.append(who.isEmpty ? "Connected" : who)
+        if let n = r.toolCount { parts.append(n == 1 ? "1 tool" : "\(n) tools") }
+        parts.append("\(r.durationMs) ms")
+        return parts.joined(separator: " · ")
+    }
+
+    /// The probe's own words, except for the one case where they describe the plumbing rather than
+    /// what to do about it.
+    private func failure(_ r: TestResult) -> String {
+        guard let error = r.error, !error.isEmpty else { return "Test failed" }
+        return error.contains("needs sign-in") ? "Sign in first" : error
     }
 
     // MARK: text
@@ -226,14 +386,6 @@ struct InspectorView: View {
         }
     }
 
-    private func authLine(_ status: ServerStatus) -> String {
-        switch status.server.auth {
-        case .none: "No auth"
-        case .oauth: status.state == "needsAuth" ? "OAuth · needs sign-in" : "OAuth · connected"
-        case .header: "Header auth"
-        }
-    }
-
     // MARK: editing
 
     /// Fields are seeded from the server once per selection, not on every status push: reloading
@@ -241,6 +393,8 @@ struct InspectorView: View {
     private func loadFields() {
         argsText = status?.server.args.joined(separator: " ") ?? ""
         envRows = (status?.server.env ?? [:]).sorted { $0.key < $1.key }.map { EnvRow(key: $0.key, value: $0.value) }
+        headerName = "Authorization"
+        headerValue = ""
     }
 
     private func commitArgs(_ status: ServerStatus) {

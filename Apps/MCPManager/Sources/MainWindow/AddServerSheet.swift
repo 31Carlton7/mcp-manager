@@ -19,6 +19,12 @@ struct AddServerSheet: View {
     @State private var argsText = ""
     @State private var envRows: [KeyValueRow] = []
     @State private var headerRows: [KeyValueRow] = []
+    @State private var auth: AuthKind = .none
+    /// The credential for header auth. It never goes into `servers.add` — that would put it in the
+    /// library file and from there into every client's config — so it is sent separately, and only
+    /// once the server exists.
+    @State private var headerName = "Authorization"
+    @State private var headerValue = ""
     /// The paste well's current height: one line to start, growing with the content up to a point
     /// past which it scrolls instead.
     @State private var pasteHeight: CGFloat = Self.pasteMinHeight
@@ -221,7 +227,7 @@ struct AddServerSheet: View {
     // MARK: advanced
 
     /// Mirrors the inspector: a stdio server has a command line and an environment, a remote one has
-    /// headers. Auth is listed so its absence is explained rather than merely missing.
+    /// headers and can be signed in to.
     @ViewBuilder private var advancedFields: some View {
         VStack(alignment: .leading, spacing: Space.m) {
             switch single?.kind {
@@ -230,10 +236,10 @@ struct AddServerSheet: View {
                 rows("Env", placeholder: ("KEY", "value"), rows: $envRows)
             case .remote:
                 rows("Headers", placeholder: ("Header", "value"), rows: $headerRows)
+                authField
             case nil:
                 EmptyView()
             }
-            authField
         }
     }
 
@@ -279,17 +285,43 @@ struct AddServerSheet: View {
         }
     }
 
+    /// Only remote servers get this: a stdio server's credentials live in its environment, and the
+    /// daemon rejects the combination outright.
     private var authField: some View {
         VStack(alignment: .leading, spacing: Space.xs) {
-            Picker("Auth", selection: .constant(AuthKind.none)) {
+            Text("Auth").font(Typography.caption).foregroundStyle(.secondary)
+            Picker("Auth", selection: $auth) {
                 Text("None").tag(AuthKind.none)
                 Text("OAuth").tag(AuthKind.oauth)
+                Text("Header").tag(AuthKind.header)
             }
-            .disabled(true)
-            .font(Typography.body)
-            Text("Available in a later version")
+            .pickerStyle(.segmented)
+            .controlSize(.small)
+            .labelsHidden()
+            if auth == .header {
+                TextField("Header", text: $headerName)
+                SecureField("value", text: $headerValue)
+            }
+            authCaption
+        }
+        .textFieldStyle(.roundedBorder)
+        .font(.system(size: 11, design: .monospaced))
+    }
+
+    @ViewBuilder private var authCaption: some View {
+        switch auth {
+        case .none:
+            EmptyView()
+        case .oauth:
+            Text("Added signed out — use Sign in on the server to finish.")
                 .font(Typography.caption)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        case .header:
+            Text("Kept in the Keychain and added by the local gateway, not written to any client.")
+                .font(Typography.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -313,6 +345,9 @@ struct AddServerSheet: View {
     private func reparse() {
         parsed = SmartPasteParser.parse(paste)
         guard let single else { return }
+        // A pasted command line is a stdio server, and stdio has nowhere to put gateway auth — so a
+        // picker the user set before pasting doesn't survive into a server the daemon would reject.
+        if single.kind == .stdio { auth = .none }
         if !nameEdited { name = single.name }
         argsText = single.args.joined(separator: " ")
         envRows = single.env.sorted { $0.key < $1.key }.map { KeyValueRow(key: $0.key, value: $0.value) }
@@ -321,8 +356,15 @@ struct AddServerSheet: View {
 
     private func add() {
         let enabled = Dictionary(uniqueKeysWithValues: clients.map { ($0, true) })
+        // The id the daemon is about to mint, by its own rule: a slug of the name, made unique
+        // against the library we can see. Worked out before the add so the credential that follows
+        // it names the right server; the commands are queued in order, so it arrives after.
+        let newID = Slug.unique(Slug.make(trimmedName), existing: Set(daemon.servers.map(\.id)))
         for server in parsed.servers {
             daemon.add(params(for: server, clients: enabled))
+        }
+        if single != nil, auth == .header, !headerName.isEmpty, !headerValue.isEmpty {
+            daemon.setHeader(newID, name: headerName.trimmingCharacters(in: .whitespaces), value: headerValue)
         }
         dismiss()
     }
@@ -340,7 +382,7 @@ struct AddServerSheet: View {
                                env: server.kind == .stdio ? dictionary(envRows) : [:],
                                url: server.url,
                                headers: server.kind == .remote ? dictionary(headerRows) : [:],
-                               auth: .none, clients: clients)
+                               auth: server.kind == .remote ? auth : .none, clients: clients)
     }
 
     /// Rows with a blank key are the half-typed ones; they are dropped rather than sent as "".

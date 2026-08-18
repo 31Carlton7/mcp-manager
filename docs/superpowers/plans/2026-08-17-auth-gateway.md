@@ -123,12 +123,12 @@ Apps/MCPManager/Sources/…                  DaemonClient commands; inspector Au
 
 **Files:** `Apps/MCPManager/Sources/{DaemonClient,MenuBarView,MainWindow/*}.swift`.
 
-- [ ] `DaemonClient`: `startAuth(id)` (awaits `.authorizeURL`, then `NSWorkspace.shared.open(url)`), `signOut(id)`, `forget(id)`, `setHeader(id,name,value)`, `test(id) async -> ProbeResult?` (result stored per id in `testResults: [String: ProbeResult]`, `testing: Set<String>`), `attentionCount` counts `needsAuth`/`error`.
-- [ ] Inspector: **Auth** section under Connection: state line with dot (green connected / yellow needsAuth / red error), buttons: oauth → "Sign in…" / "Sign out" / "Forget" (menu); header → name+value fields (value `SecureField`) + Save; none → picker to switch auth kind (None / OAuth / Header) via `update(auth:)` with a caption "Clients will be pointed at the local gateway". **Test** button enabled → spinner → inline result ("fake 1.0 · 12 tools · 340 ms" or red error).
-- [ ] Popover: rows with `needsAuth` show the yellow "Sign in" pill (tap → `startAuth`); Needs-attention hero counts them.
-- [ ] Add sheet: Advanced → Auth picker enabled (None / OAuth / Header); Header shows name/value fields; on Add, if header → `auth.setHeader` after add (DaemonClient chains it after the ack).
-- [ ] Card subline: yellow "needs sign-in" for `needsAuth` (already), green dot suffix for connected.
-- [ ] Build clean; relaunch app only; commit `feat(app): sign in / sign out / test connection / header auth`.
+- [x] `DaemonClient`: `startAuth(id)` (awaits `.authorizeURL`, then `NSWorkspace.shared.open(url)`), `signOut(id)`, `forget(id)`, `setHeader(id,name,value)`, `test(id) async -> ProbeResult?` (result stored per id in `testResults: [String: ProbeResult]`, `testing: Set<String>`), `attentionCount` counts `needsAuth`/`error`.
+- [x] Inspector: **Auth** section under Connection: state line with dot (green connected / yellow needsAuth / red error), buttons: oauth → "Sign in…" / "Sign out" / "Forget" (menu); header → name+value fields (value `SecureField`) + Save; none → picker to switch auth kind (None / OAuth / Header) via `update(auth:)` with a caption "Clients will be pointed at the local gateway". **Test** button enabled → spinner → inline result ("fake 1.0 · 12 tools · 340 ms" or red error).
+- [x] Popover: rows with `needsAuth` show the yellow "Sign in" pill (tap → `startAuth`); Needs-attention hero counts them.
+- [x] Add sheet: Advanced → Auth picker enabled (None / OAuth / Header); Header shows name/value fields; on Add, if header → `auth.setHeader` after add (DaemonClient chains it after the ack).
+- [x] Card subline: yellow "needs sign-in" for `needsAuth` (already), green dot suffix for connected.
+- [x] Build clean; commit `feat(app): sign in / sign out / test connection / header auth`. (Relaunch deferred to Task 8, which restarts both the daemon and the app.)
 
 ### Task 8: Real-world smoke with Notion (needs the human for the browser step)
 

@@ -180,13 +180,19 @@ struct MenuBarView: View {
                 .font(Typography.body)
                 .lineLimit(1)
                 .truncationMode(.middle)
-            if st.state == "needsAuth" {
-                Text("Sign in")
+            if st.authStatus == .needsAuth {
+                Button("Sign in") { daemon.startAuth(st.server.id) }
+                    .buttonStyle(.pressable)
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(.yellow)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
                     .background(.yellow.opacity(0.18), in: .capsule)
+                    .contentShape(.capsule)
+                    .disabled(daemon.gatewayPort == nil)
+                    .help(daemon.gatewayPort == nil
+                          ? "Gateway not running — auth unavailable"
+                          : "Opens your browser to sign in to \(st.server.name)")
             }
             Spacer(minLength: Space.s)
             Toggle(st.server.name, isOn: enabled(st.server))

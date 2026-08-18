@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 import MCPMCore
@@ -18,14 +19,24 @@ final class DaemonClient {
     /// under the pointer instead of waiting a round trip. Cleared by the status that follows,
     /// or reverted if the command fails.
     private(set) var pendingToggles: [String: [ClientID: Bool]] = [:]
+    /// The last test connection result per server, kept until the next test replaces it. Not
+    /// persisted: a result describes the server as it was a moment ago, not as it is.
+    private(set) var testResults: [String: TestResult] = [:]
+    /// Servers with a test in flight — the button's spinner, and the guard against a second one.
+    private(set) var testing: Set<String> = []
 
     var isConnected: Bool { if case .connected = connection { true } else { false } }
     var disconnectReason: String? { if case .disconnected(let why) = connection { why } else { nil } }
 
+    /// The port the daemon's auth gateway bound, or nil when it never started — in which case
+    /// nothing that needs a credential can be reached and the UI says so instead of offering a
+    /// sign-in that would fail.
+    var gatewayPort: Int? { status?.gatewayPort }
+
     var health: Health {
         guard isConnected, let s = status else { return .error }
         if s.clients.contains(where: { $0.installed && !$0.healthy }) { return .error }
-        if s.servers.contains(where: { $0.state == "needsAuth" }) { return .warning }
+        if s.servers.contains(where: { AuthStatus($0.state).needsAttention }) { return .warning }
         return .ok
     }
 
@@ -62,11 +73,12 @@ final class DaemonClient {
         return servers.count { isEnabled($0.server, for: filter) }
     }
 
-    /// Everything asking for a human: servers waiting on a sign-in, plus clients the daemon can't
-    /// write to.
+    /// Everything asking for a human: servers waiting on a sign-in or stuck on an auth error, plus
+    /// clients the daemon can't write to.
     var attentionCount: Int {
         guard let s = status else { return 0 }
-        return s.servers.count { $0.state == "needsAuth" } + s.clients.count { $0.installed && !$0.healthy }
+        return s.servers.count { AuthStatus($0.state).needsAttention }
+            + s.clients.count { $0.installed && !$0.healthy }
     }
 
     /// The most recent sync across installed clients — the footer's "Synced HH:mm".
@@ -76,6 +88,9 @@ final class DaemonClient {
         let command: ControlCommand
         /// Overlay entries this command owns, reverted if it fails.
         let keys: [(server: String, client: ClientID)]
+        /// Set for the commands whose answer the UI needs — a sign-in URL, a test result. Left nil
+        /// by the fire-and-forget ones, which are the majority.
+        let reply: CheckedContinuation<ControlResult, Error>?
     }
 
     private let appVersion: String
@@ -141,11 +156,13 @@ final class DaemonClient {
     private func drainCommands() async {
         for await q in commands {
             do {
-                _ = try await client.send(q.command)
+                let result = try await client.send(q.command)
                 lastError = nil
+                q.reply?.resume(returning: result)
             } catch {
                 lastError = String(describing: error)
                 revert(q.keys)
+                q.reply?.resume(throwing: error)
             }
             inFlight -= 1
         }
@@ -177,8 +194,60 @@ final class DaemonClient {
     func update(_ p: UpdateServerParams) { run(.updateServer(p)) }
     func reimport(_ c: ClientID) { run(.reimport(.init(client: c))) }
 
+    func updateAuth(_ id: String, _ auth: AuthKind) { update(UpdateServerParams(id: id, auth: auth)) }
+    func updateHeaders(_ id: String, _ headers: [String: String]) {
+        update(UpdateServerParams(id: id, headers: headers))
+    }
+
+    // MARK: auth
+
+    /// Sends the user to the authorization server. The daemon builds the URL but deliberately does
+    /// not open it — the browser has to belong to the logged-in GUI session, which is us.
+    func startAuth(_ id: String) {
+        Task { [weak self] in
+            guard let self else { return }
+            // A failure is already on `lastError`, put there by the drain, and the banner shows it.
+            guard case .authorizeURL(let raw) = try? await send(.authStart(.init(id: id))),
+                  let url = URL(string: raw) else { return }
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    /// Drops the token but keeps the client registration, so signing back in skips re-registering.
+    func signOut(_ id: String) { run(.authSignOut(.init(id: id))) }
+    /// Drops everything, registration included — the escape hatch when a server's registration has
+    /// gone stale on the other end.
+    func forget(_ id: String) { run(.authForget(.init(id: id))) }
+    func setHeader(_ id: String, name: String, value: String) {
+        run(.authSetHeader(.init(id: id, name: name, value: value)))
+    }
+
+    /// Runs an MCP `initialize` against the server the way its clients reach it. Concurrent tests of
+    /// the same server are dropped rather than queued: the second would only re-answer the first.
+    func test(_ id: String) async {
+        guard !testing.contains(id) else { return }
+        testing.insert(id)
+        defer { testing.remove(id) }
+        do {
+            if case .testResult(let r) = try await send(.testServer(.init(id: id))) {
+                testResults[id] = r
+            }
+        } catch {
+            testResults[id] = TestResult(ok: false, error: String(describing: error), durationMs: 0)
+        }
+    }
+
     private func run(_ cmd: ControlCommand, keys: [(server: String, client: ClientID)] = []) {
         inFlight += 1
-        commandCont.yield(Queued(command: cmd, keys: keys))
+        commandCont.yield(Queued(command: cmd, keys: keys, reply: nil))
+    }
+
+    /// The same queue as `run`, so a command that needs its answer still can't overtake the writes
+    /// issued before it — a sign-in must land after the `auth` switch that made it possible.
+    private func send(_ cmd: ControlCommand) async throws -> ControlResult {
+        inFlight += 1
+        return try await withCheckedThrowingContinuation { cont in
+            commandCont.yield(Queued(command: cmd, keys: [], reply: cont))
+        }
     }
 }
