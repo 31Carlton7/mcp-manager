@@ -25,15 +25,22 @@ struct MenuBarLabel: View {
     @State private var offeredSetup = false
 
     var body: some View {
-        Image(systemName: "powerplug.fill")
-            .foregroundStyle(daemon.health.color)
-            .overlay(alignment: .topTrailing) {
+        // A template PDF (Resources/Assets.xcassets/MenuBarIcon, drawn by
+        // scripts/render-menubar-icon.swift): macOS recolours it for the bar's appearance, like the
+        // system glyphs beside it. Health is a small dot at the bottom-right corner, hidden when ok.
+        Image("MenuBarIcon")
+            .renderingMode(.template)
+            .resizable()
+            .frame(width: 18, height: 18)
+            .overlay(alignment: .bottomTrailing) {
                 if daemon.health != .ok {
                     Circle().fill(daemon.health.color)
-                        .frame(width: 4, height: 4)
-                        .offset(x: 2, y: -1)
+                        .frame(width: 5, height: 5)
+                        .overlay(Circle().strokeBorder(.background, lineWidth: 1))
+                        .offset(x: 1, y: 1)
                 }
             }
+            .accessibilityLabel("MCP Manager")
             .task {
                 daemon.start()
                 // A service that is registered and meant to be running, but hasn't answered by

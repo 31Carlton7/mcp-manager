@@ -13,6 +13,7 @@ targets:
     platform: macOS
     sources:
       - Sources
+      - Resources/Assets.xcassets
       # Not a resource: launchd looks for the agent's plist in Contents/Library/LaunchAgents, and
       # `SMAppService.agent(plistName:)` only finds it there.
       - path: Resources/co.charmtechnologies.mcpmd.plist
