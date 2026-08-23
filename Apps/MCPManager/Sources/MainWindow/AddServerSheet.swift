@@ -246,8 +246,12 @@ struct AddServerSheet: View {
                         .font(Typography.caption)
                 }
             }
-        case .unreachable, nil:
+        case .unreachable:
             statusLine("Unreachable (\(i.detail))", symbol: "bolt.horizontal", tint: .orange)
+        case nil:
+            // A verdict this app is too old to know about. Its sentence is still readable, and
+            // nothing is blocked on a word we can't interpret.
+            statusLine(i.detail, symbol: "questionmark.circle", tint: .secondary)
         }
     }
 
