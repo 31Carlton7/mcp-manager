@@ -52,6 +52,15 @@ targets:
           mkdir -p "$DEST"
           cp -f "$PACKAGE/.build/$SWIFT_CONFIG/mcpmd" "$DEST/mcpmd"
           chmod +x "$DEST/mcpmd"
+          # The daemon's own resources — the curated catalog — are a SwiftPM resource bundle, and
+          # `swift build` leaves it beside the binary rather than in it. Without this the catalog
+          # tab has nothing to show offline. Resources/ is where a bundle belongs, and where
+          # BundledCatalog looks relative to the executable.
+          BUNDLE="mcp-manager_MCPMDaemon.bundle"
+          RESOURCES="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH"
+          mkdir -p "$RESOURCES"
+          rm -rf "$RESOURCES/$BUNDLE"
+          cp -R "$PACKAGE/.build/$SWIFT_CONFIG/$BUNDLE" "$RESOURCES/$BUNDLE"
     # Xcode signs the app bundle after every build phase has run, and it only signs the bundle's
     # own executable — a nested Mach-O it did not produce stays unsigned and fails notarization.
     postBuildScripts:

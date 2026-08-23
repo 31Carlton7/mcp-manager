@@ -39,8 +39,13 @@ public enum BundledCatalog {
             // A resource bundle sits beside its `.xctest` or `.app`, not inside it.
             roots.append(bundle.bundleURL.deletingLastPathComponent())
         }
-        roots.append(URL(fileURLWithPath: ProcessInfo.processInfo.arguments.first ?? "/")
-            .deletingLastPathComponent())
+        let executableDirectory = URL(fileURLWithPath: ProcessInfo.processInfo.arguments.first ?? "/")
+            .deletingLastPathComponent()
+        roots.append(executableDirectory)
+        // Embedded in the app: `mcpmd` sits in Contents/MacOS and its resource bundle is copied
+        // into Contents/Resources, which is where a bundle belongs and where `Bundle.main` does
+        // not point when the running executable is not the bundle's own.
+        roots.append(executableDirectory.deletingLastPathComponent().appending(path: "Resources"))
         for root in roots {
             for relative in ["\(bundleName)/Resources/catalog.json", "\(bundleName)/catalog.json",
                              "Resources/catalog.json", "catalog.json"] {
