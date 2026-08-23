@@ -47,6 +47,23 @@ import Foundation
     #expect(SmartPasteParser.parse("claude mcp add --scope user").summary == "Couldn't read that claude mcp add command")
 }
 
+@Test func sseEndpointsAreDialledWithTheLegacyTransport() {
+    // A bare URL: only the path says so.
+    #expect(SmartPasteParser.parse("https://mcp.sentry.dev/sse").servers ==
+            [ExternalServer(name: "sentry", kind: .remote, url: "https://mcp.sentry.dev/sse", transport: .sse)])
+    #expect(SmartPasteParser.parse("https://mcp.sentry.dev/mcp").servers.first?.transport == nil)
+    // A path that merely contains "sse" is not an SSE endpoint.
+    #expect(SmartPasteParser.parse("https://example.com/sse-docs").servers.first?.transport == nil)
+    // Spelled out on the command, and inferred when it isn't.
+    #expect(SmartPasteParser.parse("claude mcp add --transport sse sentry https://mcp.sentry.dev/stream").servers ==
+            [ExternalServer(name: "sentry", kind: .remote, url: "https://mcp.sentry.dev/stream", transport: .sse)])
+    #expect(SmartPasteParser.parse("claude mcp add sentry https://mcp.sentry.dev/sse").servers.first?.transport == .sse)
+    #expect(SmartPasteParser.parse("claude mcp add -t http sentry https://mcp.sentry.dev/sse").servers.first?.transport == .sse)
+    // Through an mcp-remote bridge, where the URL is still the server.
+    #expect(SmartPasteParser.parse("npx -y mcp-remote https://mcp.sentry.dev/sse").servers ==
+            [ExternalServer(name: "sentry", kind: .remote, url: "https://mcp.sentry.dev/sse", transport: .sse)])
+}
+
 @Test func mcpRemoteBridgeIsJustARemoteServer() {
     #expect(SmartPasteParser.parse("npx -y mcp-remote https://mcp.notion.com/mcp").servers ==
             [ExternalServer(name: "notion", kind: .remote, url: "https://mcp.notion.com/mcp")])

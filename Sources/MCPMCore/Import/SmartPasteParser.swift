@@ -18,7 +18,8 @@ public enum SmartPasteParser {
         if text.isEmpty { return Result(servers: [], summary: "") }
         if text.hasPrefix("{") || text.hasPrefix("[") { return parseJSON(text) }
         if let host = remoteHost(text) {
-            return Result(servers: [ExternalServer(name: nameFromHost(host), kind: .remote, url: text)],
+            return Result(servers: [ExternalServer(name: nameFromHost(host), kind: .remote, url: text,
+                                                   transport: transportFromPath(text))],
                           summary: "Remote server · \(host)")
         }
         let tokens = shellSplit(text)
@@ -36,7 +37,8 @@ public enum SmartPasteParser {
     static func commandLine(name: String?, command: String, args: [String],
                             env: [String: String]) -> Result {
         if let url = bridgedRemoteURL(command: command, args: args), let host = remoteHost(url) {
-            return Result(servers: [ExternalServer(name: name ?? nameFromHost(host), kind: .remote, url: url)],
+            return Result(servers: [ExternalServer(name: name ?? nameFromHost(host), kind: .remote, url: url,
+                                                   transport: transportFromPath(url))],
                           summary: "Remote server · \(host)")
         }
         let server = ExternalServer(name: name ?? nameFromCommand(command, args: args), kind: .stdio,
@@ -52,6 +54,15 @@ public enum SmartPasteParser {
               args.contains(where: { nameFromPackage($0) == "mcp-remote" })
         else { return nil }
         return args.first { remoteHost($0) != nil }
+    }
+
+    /// A pasted URL says which transport to dial only through its path: `/sse` is where servers
+    /// that still speak the legacy transport put it, by convention every SDK follows. Nothing else
+    /// in a bare URL carries that, and dialling Streamable HTTP at an SSE endpoint fails outright.
+    /// Only pastes go through here — a client config that meant SSE spells it out with `"type"`.
+    static func transportFromPath(_ text: String) -> Transport? {
+        guard let path = URL(string: text)?.path.lowercased() else { return nil }
+        return path.hasSuffix("/sse") ? .sse : nil
     }
 
     static func remoteHost(_ text: String) -> String? {
@@ -104,7 +115,8 @@ public enum SmartPasteParser {
 
         if let first = rest.first, let host = remoteHost(first) {
             return Result(servers: [ExternalServer(name: name, kind: .remote, url: first,
-                                                   headers: headers, transport: transport)],
+                                                   headers: headers,
+                                                   transport: transport ?? transportFromPath(first))],
                           summary: "Remote server · \(host)")
         }
         guard let command = rest.first else {
