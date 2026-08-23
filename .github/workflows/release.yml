@@ -1,0 +1,190 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build, sign, notarize, publish
+    runs-on: macos-15
+    env:
+      APP_PATH: Apps/MCPManager/build/Build/Products/Release/MCPManager.app
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          if [ -d /Applications/Xcode_26.app ]; then
+            sudo xcode-select -s /Applications/Xcode_26.app
+          fi
+          xcodebuild -version
+
+      - name: Version from tag
+        id: version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Releasing $VERSION"
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: Apps/MCPManager
+        run: xcodegen generate
+
+      # Signing happens as its own step below, so the build itself is unsigned. `-target` rather
+      # than `-scheme`: project.yml declares no shared scheme.
+      - name: Build app (Release)
+        working-directory: Apps/MCPManager
+        run: |
+          xcodebuild \
+            -project MCPManager.xcodeproj \
+            -target MCPManager \
+            -configuration Release \
+            -derivedDataPath build \
+            MARKETING_VERSION=${{ steps.version.outputs.version }} \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      # The generated Info.plist hardcodes its version keys instead of referring to
+      # $(MARKETING_VERSION), so the build settings above do not reach the bundle on their own.
+      # Stamping here happens before signing, so the signature covers the final plist.
+      - name: Stamp bundle version
+        run: |
+          PLIST="$APP_PATH/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${{ steps.version.outputs.version }}" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${{ github.run_number }}" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$PLIST"
+
+      # Secrets: MACOS_CERT_P12 (base64 of the Developer ID Application .p12) and
+      # MACOS_CERT_PASSWORD (the password set when exporting it). See docs/RELEASING.md.
+      - name: Import signing certificate
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD=$(uuidgen)
+          CERT="$RUNNER_TEMP/certificate.p12"
+
+          echo "$MACOS_CERT_P12" | base64 --decode > "$CERT"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          # Runner jobs are short; the timeout only exists so the keychain cannot sit unlocked.
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$CERT" -k "$KEYCHAIN" -P "$MACOS_CERT_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          # Without this codesign blocks on a UI prompt for the private key.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          rm -f "$CERT"
+
+          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN" \
+            | awk '/Developer ID Application/ { print $2; exit }')
+          if [ -z "$IDENTITY" ]; then
+            echo "No Developer ID Application identity in the imported certificate" >&2
+            security find-identity -v -p codesigning "$KEYCHAIN" >&2
+            exit 1
+          fi
+          echo "SIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+          echo "SIGN_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+
+      # The daemon inside Contents/MacOS has to be signed before the bundle that contains it,
+      # otherwise signing the app invalidates it.
+      - name: Sign app
+        run: |
+          codesign --force --options runtime --timestamp \
+            --keychain "$SIGN_KEYCHAIN" --sign "$SIGN_IDENTITY" \
+            "$APP_PATH/Contents/MacOS/mcpmd"
+          codesign --force --options runtime --timestamp \
+            --keychain "$SIGN_KEYCHAIN" --sign "$SIGN_IDENTITY" \
+            "$APP_PATH"
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+
+      - name: Build DMG
+        id: dmg
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          DMG="dist/MCPManager-$VERSION.dmg"
+          scripts/make-dmg.sh "$APP_PATH" "$VERSION" "$DMG"
+          # A signed DMG means Gatekeeper is happy with the disk image itself, not only the app.
+          codesign --force --timestamp \
+            --keychain "$SIGN_KEYCHAIN" --sign "$SIGN_IDENTITY" "$DMG"
+          echo "dmg=$DMG" >> "$GITHUB_OUTPUT"
+
+      # Secrets: APPLE_ID (the Apple ID email), APPLE_TEAM_ID (10-character Team ID),
+      # APPLE_APP_PASSWORD (an app-specific password, not the account password).
+      - name: Notarize and staple
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          xcrun notarytool submit "${{ steps.dmg.outputs.dmg }}" \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            --wait
+          xcrun stapler staple "${{ steps.dmg.outputs.dmg }}"
+          spctl --assess --type open --context context:primary-signature -v "${{ steps.dmg.outputs.dmg }}"
+
+      - name: Checksum
+        id: checksum
+        run: |
+          DMG="${{ steps.dmg.outputs.dmg }}"
+          SHA=$(shasum -a 256 "$DMG" | awk '{ print $1 }')
+          shasum -a 256 "$DMG" > "$DMG.sha256"
+          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+          echo "$SHA"
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: MCP Manager ${{ steps.version.outputs.version }}
+          generate_release_notes: true
+          files: |
+            ${{ steps.dmg.outputs.dmg }}
+            ${{ steps.dmg.outputs.dmg }}.sha256
+
+      # Secret: TAP_GITHUB_TOKEN, a token with write access to carltonaikins/homebrew-tap.
+      # Homebrew/mcp-manager.rb in this repo is the source of the cask; the tap gets a copy with
+      # the version and checksum of this release written in.
+      - name: Update Homebrew cask
+        env:
+          TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+          SHA256: ${{ steps.checksum.outputs.sha256 }}
+        run: |
+          TAP="$RUNNER_TEMP/homebrew-tap"
+          git clone --depth 1 \
+            "https://x-access-token:$TAP_GITHUB_TOKEN@github.com/carltonaikins/homebrew-tap.git" "$TAP"
+
+          mkdir -p "$TAP/Casks"
+          cp Homebrew/mcp-manager.rb "$TAP/Casks/mcp-manager.rb"
+          /usr/bin/sed -i '' -E "s/^  version \".*\"\$/  version \"$VERSION\"/" "$TAP/Casks/mcp-manager.rb"
+          /usr/bin/sed -i '' -E "s/^  sha256 \".*\"\$/  sha256 \"$SHA256\"/" "$TAP/Casks/mcp-manager.rb"
+          grep -E '^  (version|sha256) ' "$TAP/Casks/mcp-manager.rb"
+
+          git -C "$TAP" config user.name "github-actions[bot]"
+          git -C "$TAP" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "$TAP" add Casks/mcp-manager.rb
+          if git -C "$TAP" diff --cached --quiet; then
+            echo "Cask already up to date"
+          else
+            git -C "$TAP" commit -m "mcp-manager $VERSION"
+            git -C "$TAP" push
+          fi
+
+      - name: Clean up keychain
+        if: always()
+        run: |
+          if [ -n "${SIGN_KEYCHAIN:-}" ]; then security delete-keychain "$SIGN_KEYCHAIN" || true; fi

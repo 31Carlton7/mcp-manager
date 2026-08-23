@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: swift test + app build
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      # The app targets macOS 26, so the build needs Xcode 26. Swapped in only when the image has
+      # it, so the workflow keeps working on an image where 26 is already the default.
+      - name: Select Xcode
+        run: |
+          if [ -d /Applications/Xcode_26.app ]; then
+            sudo xcode-select -s /Applications/Xcode_26.app
+          fi
+          xcodebuild -version
+          swift --version
+
+      - name: Cache SwiftPM
+        uses: actions/cache@v4
+        with:
+          path: .build
+          key: spm-${{ runner.os }}-${{ hashFiles('Package.resolved') }}
+          restore-keys: spm-${{ runner.os }}-
+
+      # Runs against the runner's real HOME, which is fine: the tests never touch client configs
+      # outside a temporary directory.
+      - name: swift test
+        run: swift test
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: Apps/MCPManager
+        run: xcodegen generate
+
+      # No signing identity on the runner, and none is needed to know the app compiles.
+      # `-target` rather than `-scheme`: project.yml declares no shared scheme.
+      - name: Build app (Debug)
+        working-directory: Apps/MCPManager
+        run: |
+          xcodebuild \
+            -project MCPManager.xcodeproj \
+            -target MCPManager \
+            -configuration Debug \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
