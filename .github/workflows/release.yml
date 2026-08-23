@@ -23,12 +23,29 @@ jobs:
           fi
           xcodebuild -version
 
+      # The tag is only a label; MCPMVersion.current is what the daemon reports and what the app's
+      # MARKETING_VERSION resolves to. A tag that disagrees with it would ship a bundle whose
+      # version does not match the release it came from, so stop before anything is built.
       - name: Version from tag
         id: version
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
+          SOURCE_VERSION=$(sed -n 's/.*static let current = "\(.*\)".*/\1/p' Sources/MCPMCore/Version.swift)
+          if [ -z "$SOURCE_VERSION" ]; then
+            echo "Could not read MCPMVersion.current from Sources/MCPMCore/Version.swift" >&2
+            exit 1
+          fi
+          if [ "$VERSION" != "$SOURCE_VERSION" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match MCPMVersion.current ($SOURCE_VERSION)." >&2
+            echo "Bump Sources/MCPMCore/Version.swift and re-tag." >&2
+            exit 1
+          fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Releasing $VERSION"
+
+      # A release should not be the first time the suite runs against this commit.
+      - name: swift test
+        run: swift test
 
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -54,15 +71,16 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             build
 
-      # The generated Info.plist hardcodes its version keys instead of referring to
-      # $(MARKETING_VERSION), so the build settings above do not reach the bundle on their own.
-      # Stamping here happens before signing, so the signature covers the final plist.
-      - name: Stamp bundle version
+      # project.yml resolves CFBundleShortVersionString from $(MARKETING_VERSION), so the settings
+      # passed above are already in the bundle. Checked rather than assumed: a wrong version here
+      # ships silently.
+      - name: Check bundle version
         run: |
-          PLIST="$APP_PATH/Contents/Info.plist"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${{ steps.version.outputs.version }}" "$PLIST"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${{ github.run_number }}" "$PLIST"
-          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$PLIST"
+          BUILT=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP_PATH/Contents/Info.plist")
+          if [ "$BUILT" != "${{ steps.version.outputs.version }}" ]; then
+            echo "Built bundle says $BUILT, tag says ${{ steps.version.outputs.version }}" >&2
+            exit 1
+          fi
 
       # Secrets: MACOS_CERT_P12 (base64 of the Developer ID Application .p12) and
       # MACOS_CERT_PASSWORD (the password set when exporting it). See docs/RELEASING.md.

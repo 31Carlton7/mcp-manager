@@ -12,9 +12,9 @@ macOS only, and it needs macOS 26 or later.
 
 ## Screenshots
 
-![Server grid with inspector](docs/img/grid.png)
+Screenshots coming with the first release.
 
-![Menu bar popover](docs/img/popover.png)
+<!-- screenshots: docs/img/grid.png, docs/img/popover.png -->
 
 ## Install
 
@@ -51,8 +51,16 @@ which means an upgrade swaps the bundle and the next start runs the new binary.
 The daemon owns `~/.mcpm/servers.json`, the library and the only source of truth. It watches each
 client's config file, imports anything you added by hand, and writes those files back with only
 the MCP section touched. Everything else in the file stays byte-for-byte identical, and a copy goes
-to `~/.mcpm/backups/<client>/` before every write (the last five are kept). The app talks to the
-daemon over `~/.mcpm/mcpmd.sock`, mode 0600.
+to `~/.mcpm/backups/<client>/` before every write. The app talks to the daemon over
+`~/.mcpm/mcpmd.sock`, mode 0600.
+
+Nothing is written until you say so. On first launch the app shows what it found across your
+clients and what the first import would change, and the daemon stays read-only (reading and
+planning, writing nothing) until you confirm it.
+
+Preferences live in `~/.mcpm/settings.json`: `gatewayPort` (7337 by default), `backupRetention`
+(5 backups per client) and `importConfirmed`, the flag the onboarding sets. Settings in the app
+write the same file. `MCPM_GATEWAY_PORT` outranks the file when it is set.
 
 Servers with `auth: oauth` or `auth: header` are written to clients as
 `http://127.0.0.1:7337/s/<id>/mcp` instead of their real URL. The gateway on that port proxies the
@@ -114,7 +122,6 @@ HOME=$(mktemp -d) MCPM_TOKEN_STORE=file MCPM_GATEWAY_PORT=7447 .build/debug/mcpm
 
 - Catalog of curated servers plus the official MCP registry, so adding one is a search rather than
   a paste.
-- Onboarding that previews the diff before the first import writes anything.
 - More clients (Windsurf, Zed, VS Code) once the four in place have settled.
 
 ## License

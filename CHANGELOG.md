@@ -20,8 +20,16 @@ First release. Everything below is new.
   a server in the app updates every client it is enabled in, while adding or removing one by hand
   in a client's config flips that client's checkbox.
 - **File watching and import.** Client configs are watched, outside edits are imported into the
-  library, and each file is backed up to `~/.mcpm/backups/<client>/` before every write (last five
-  kept).
+  library, and each file is backed up to `~/.mcpm/backups/<client>/` before every write.
+- **First-run onboarding.** The app shows what it found across the installed clients and what the
+  first import would change. Until that is confirmed the daemon runs read-only: it reads every
+  client and plans a sync, but saves nothing and writes no file.
+- **Settings in `~/.mcpm/settings.json`:** `gatewayPort` (default 7337), `backupRetention`
+  (default 5) and `importConfirmed`. Unknown and missing keys are tolerated on read, and
+  `MCPM_GATEWAY_PORT` outranks the file.
+- **Transport recorded per remote server**, `http` (streamable HTTP) or `sse`, and carried into
+  every client config rather than guessed. A client pointed at the wrong one just fails to
+  connect.
 - **`mcpmd` daemon**, shipped inside the app bundle and installed as a LaunchAgent
   (`co.charmtechnologies.mcpmd`) through `SMAppService`, with a JSON-over-Unix-socket control API
   on `~/.mcpm/mcpmd.sock` (mode 0600, peer UID checked) and an app/daemon version handshake.
@@ -45,9 +53,8 @@ First release. Everything below is new.
 - **Test connection** for any server: stdio servers are spawned and given an MCP `initialize`,
   remote servers are probed through the gateway, and the result reports the server name, version
   and tool count.
-- **Launch at login**, toggled in Settings, alongside reinstall and restart of the background
-  service.
-- **`MCPM_GATEWAY_PORT`** to move the gateway off 7337.
+- **Launch at login**, registered with `SMAppService` and toggled in Settings, alongside reinstall
+  and restart of the background service.
 
 ### Known issues
 

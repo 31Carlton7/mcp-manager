@@ -3,6 +3,8 @@ name: CI
 on:
   push:
     branches: ["**"]
+    # Tags too: a release build should never be the first CI this commit sees.
+    tags: ["v*"]
   pull_request:
 
 concurrency:

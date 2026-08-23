@@ -82,18 +82,21 @@ edit it here rather than in the tap.
 
 ## Cutting a release
 
-1. Update `CHANGELOG.md`: rename the `Unreleased` heading to the version and today's date, and add
+1. Bump `MCPMVersion.current` in `Sources/MCPMCore/Version.swift` and `MARKETING_VERSION` in
+   `Apps/MCPManager/project.yml` to the version you are about to tag.
+2. Update `CHANGELOG.md`: rename the `Unreleased` heading to the version and today's date, and add
    a link at the bottom.
-2. Commit, then tag and push:
+3. Commit, then tag and push:
 
    ```
    git tag -a v0.1.0 -m "MCP Manager 0.1.0"
    git push origin v0.1.0
    ```
 
-3. Watch the **Release** workflow. Notarization is the slow step; `notarytool submit --wait`
+4. Watch the **Release** workflow. It runs `swift test` before it builds, so a failing suite stops
+   the release instead of shipping past it. Notarization is the slow step; `notarytool submit --wait`
    usually returns in a few minutes but can take longer when Apple is busy.
-4. Verify from a clean Mac (or at least a different one):
+5. Verify from a clean Mac (or at least a different one):
 
    ```
    brew install --cask carltonaikins/tap/mcp-manager
@@ -102,15 +105,17 @@ edit it here rather than in the tap.
 
 ## Version numbers
 
-The tag drives everything. The workflow strips the leading `v` and passes
-`MARKETING_VERSION=<version> CURRENT_PROJECT_VERSION=<run number>` to `xcodebuild`.
+`Sources/MCPMCore/Version.swift` holds the version. **The tag has to match it**: the workflow reads
+`MCPMVersion.current` and fails before it builds anything if `v<version>` and that string disagree.
+The daemon reports `MCPMVersion.current`, so a mismatch would ship a bundle whose version is not
+the one on the release. Bump `Version.swift` (and `MARKETING_VERSION` in `project.yml` with it),
+commit, then tag.
 
-`Apps/MCPManager/Sources/Info.plist` currently hardcodes `CFBundleShortVersionString` as `1.0` and
-`CFBundleVersion` as `1` instead of referring to `$(MARKETING_VERSION)` and
-`$(CURRENT_PROJECT_VERSION)`, so those build settings do not reach the bundle by themselves. The
-workflow stamps both keys with `PlistBuddy` after the build and before signing, which covers it.
-The tidier fix is to set them to the variables in `project.yml`'s `info.properties`; once that
-happens the stamping step can go.
+Past that check the tag drives the build: the workflow strips the leading `v` and passes
+`MARKETING_VERSION=<version> CURRENT_PROJECT_VERSION=<run number>` to `xcodebuild`. `project.yml`
+resolves `CFBundleShortVersionString` from `$(MARKETING_VERSION)` and `CFBundleVersion` from
+`$(CURRENT_PROJECT_VERSION)`, so those reach the built bundle. The workflow reads
+`CFBundleShortVersionString` back out of the built app and fails if it is not the tag's version.
 
 ## Notes on the build
 
@@ -127,7 +132,13 @@ happens the stamping step can go.
   daemon is the likely reason), pass it on both `codesign` calls.
 - The DMG is built by `scripts/make-dmg.sh` with `hdiutil` only, no `create-dmg` and no other
   Homebrew dependency. It is signed as well, then notarized and stapled, so a download that never
-  reaches Apple's servers still passes Gatekeeper.
+  reaches Apple's servers still passes Gatekeeper. The script passes no `-fs`, so `hdiutil` picks
+  the host default: macOS 26 refuses to create HFS+ images, and pinning a filesystem would break
+  the script on one end or the other.
+- Only the DMG is notarized and stapled, not the `.app` inside it. Stapling the app too means a
+  second notarization round trip (zip the app, submit, staple, then build and submit the DMG), and
+  the ticket on the DMG already covers the first launch of the app copied out of it. Worth
+  revisiting if anyone reports a Gatekeeper prompt offline.
 
 ## If notarization fails
 
