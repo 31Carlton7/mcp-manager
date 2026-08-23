@@ -3,7 +3,7 @@ import MCPMCore
 import MCPMControl
 import MCPMGateway
 
-public let daemonVersion = "0.1.0"
+public let daemonVersion = MCPMVersion.current
 
 public enum HandlerError: Error, CustomStringConvertible {
     case notFound(String)

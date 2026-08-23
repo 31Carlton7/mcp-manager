@@ -73,11 +73,20 @@ targets:
       path: Sources/Info.plist
       properties:
         CFBundleDisplayName: MCP Manager
+        # Resolved from the build settings below so the version lives in exactly one place, and so
+        # a MARKETING_VERSION= override on the xcodebuild command line reaches the bundle.
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSUIElement: true
         NSHumanReadableCopyright: ""
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: co.charmtechnologies.mcpmanager
+        # Keep in step with MCPMVersion.current in Sources/MCPMCore/Version.swift. The release
+        # workflow can override it per-build with MARKETING_VERSION=... on the xcodebuild command
+        # line, which wins over this project-level setting.
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: complete
         ENABLE_HARDENED_RUNTIME: YES

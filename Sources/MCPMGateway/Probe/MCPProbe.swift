@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import MCPMCore
 
 /// Outcome of a "Test connection": the MCP `initialize` handshake plus a best-effort `tools/list`.
 public struct ProbeResult: Codable, Equatable, Sendable {
@@ -116,7 +117,7 @@ private final class StderrTail: @unchecked Sendable {
 /// `tools/list`. Never throws; every failure is folded into `ProbeResult.error`.
 public enum MCPProbe {
     static let protocolVersion = "2025-06-18"
-    static var clientInfo: [String: Any] { ["name": "MCP Manager", "version": "0.1.0"] }
+    static var clientInfo: [String: Any] { ["name": "MCP Manager", "version": MCPMVersion.current] }
 
     // MARK: - JSON-RPC helpers
 

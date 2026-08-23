@@ -116,7 +116,7 @@ final class DaemonClient {
     init(socketPath: String = Paths().socket.path, appVersion: String? = nil) {
         self.appVersion = appVersion
             ?? (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String)
-            ?? "0.1.0"
+            ?? MCPMVersion.current
         client = ControlClient(socketPath: socketPath)
         aux = ControlClient(socketPath: socketPath)
         (commands, commandCont) = AsyncStream<Queued>.makeStream()
