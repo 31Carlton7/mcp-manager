@@ -147,3 +147,72 @@ private actor Counter {
     // codex file untouched despite being unhealthy
     #expect(try String(contentsOf: e.codex.configPath, encoding: .utf8) == "this is = not toml [[[")
 }
+
+// MARK: - Read-only mode
+
+/// The first-run hold: everything is read and planned, and none of it is written down. A user who
+/// has not yet approved the import must find their config files byte-for-byte as they left them.
+@Test func readOnlyCoordinatorPlansWithoutTouchingAnyFile() async throws {
+    let e = try makeEnv()
+    await e.coord.setReadOnly(true)
+    let cursorBefore = Data(#"{"mcpServers":{"a":{"command":"x"}}}"#.utf8)
+    try cursorBefore.write(to: e.cursor.configPath)
+
+    let out = try await e.coord.runOnce()
+    // The plan is still the full answer: one server adopted, and codex written to carry nothing.
+    #expect(out.adopted.map(\.name) == ["a"])
+
+    #expect(!FileManager.default.fileExists(atPath: e.store.url.path))
+    #expect(try Data(contentsOf: e.cursor.configPath) == cursorBefore)
+    #expect(!FileManager.default.fileExists(atPath: e.codex.configPath.path))
+    // Nor in memory: the library the app sees is the one on disk, not a plan waiting to happen.
+    #expect(await e.coord.currentLibrary().servers.isEmpty)
+}
+
+@Test func aReadOnlyCoordinatorRefusesToMutate() async throws {
+    let e = try makeEnv()
+    try Data(#"{"mcpServers":{"a":{"command":"x"}}}"#.utf8).write(to: e.cursor.configPath)
+    _ = try await e.coord.runOnce()
+    await e.coord.setReadOnly(true)
+
+    await #expect(throws: SyncCoordinatorError.readOnly) {
+        try await e.coord.mutate { lib in lib.servers.removeAll() }
+    }
+    #expect(await e.coord.currentLibrary().servers.count == 1)
+}
+
+/// Leaving read-only mode is the whole point of confirming: the same pass that was held now runs.
+@Test func leavingReadOnlyModeLetsTheHeldImportThrough() async throws {
+    let e = try makeEnv()
+    await e.coord.setReadOnly(true)
+    try Data(#"{"mcpServers":{"a":{"command":"x"}}}"#.utf8).write(to: e.cursor.configPath)
+    _ = try await e.coord.runOnce()
+    #expect(!FileManager.default.fileExists(atPath: e.store.url.path))
+
+    await e.coord.setReadOnly(false)
+    _ = try await e.coord.runOnce()
+    #expect(try e.store.load().servers.map(\.name) == ["a"])
+}
+
+/// `plannedChanges` is what the onboarding preview is built from: it answers the same question a
+/// sync would, and answers it without doing anything.
+@Test func plannedChangesReportsTheWriteAConflictWouldCauseWithoutCausingIt() async throws {
+    let e = try makeEnv()
+    await e.coord.setReadOnly(true)
+    let cursorBefore = Data(#"{"mcpServers":{"shared":{"command":"cursor-version"}}}"#.utf8)
+    try cursorBefore.write(to: e.cursor.configPath)
+    try Data("""
+    [mcp_servers.shared]
+    command = "codex-version"
+    """.utf8).write(to: e.codex.configPath)
+
+    let (plan, snapshots) = await e.coord.plannedChanges()
+    // One library entry for the two spellings — codex's, since adoption runs in client order —
+    // and cursor is the file that would be rewritten to match it.
+    #expect(plan.adopted.map(\.command) == ["codex-version"])
+    #expect(plan.writes.keys.sorted() == [.cursor])
+    #expect(plan.writes[.cursor]?.first?.command == "codex-version")
+    // Which is exactly the write the user gets to see before it happens, rather than after.
+    #expect(snapshots[.cursor]?.first?.command == "cursor-version")
+    #expect(try Data(contentsOf: e.cursor.configPath) == cursorBefore)
+}

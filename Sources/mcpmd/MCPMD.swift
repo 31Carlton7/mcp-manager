@@ -40,17 +40,26 @@ enum MCPMD {
         // fixes it from the app.
         let settingsStore = SettingsStore(url: paths.settings)
         var settings = Settings()
+        var settingsReadable = true
         do {
             settings = try settingsStore.load()
         } catch {
+            settingsReadable = false
             log.error("settings.json is unreadable, using defaults: \(String(describing: error), privacy: .public)")
         }
 
+        let library = Store(url: paths.library)
+        // An install from before onboarding existed already has a library, so it is not waiting to
+        // be asked anything. Not written back over a settings file we could not read —
+        // see `confirmingExistingInstall`.
+        settings = SettingsService.confirmingExistingInstall(settings, library: library, into: settingsStore,
+                                                            persist: settingsReadable)
+
         let envPort = environmentGatewayPort()
         let gatewayPort = envPort ?? settings.gatewayPort
-        let coord = SyncCoordinator(store: Store(url: paths.library), adapters: AllAdapters.make(),
+        let coord = SyncCoordinator(store: library, adapters: AllAdapters.make(),
                                     backups: BackupStore(root: paths.backups, keep: settings.backupRetention),
-                                    gatewayPort: gatewayPort)
+                                    gatewayPort: gatewayPort, readOnly: !settings.importConfirmed)
         let settingsService = SettingsService(store: settingsStore, initial: settings, runningPort: gatewayPort,
                                               portOverriddenByEnvironment: envPort != nil,
                                               applyRetention: { keep in await coord.setBackupRetention(keep) })

@@ -4,10 +4,14 @@ public enum SyncCoordinatorError: Error, Equatable, CustomStringConvertible {
     /// A mutation was attempted before the library was ever read successfully. Saving now would
     /// overwrite a store we failed to load — usually a corrupt one the user still wants back.
     case notLoaded
+    /// A mutation was attempted while the first import is still unconfirmed. Nothing may be
+    /// written until the user has seen what the import would do.
+    case readOnly
 
     public var description: String {
         switch self {
         case .notLoaded: "library not loaded (see lastError)"
+        case .readOnly: "setup is not finished — confirm the first import before changing anything"
         }
     }
 }
@@ -33,6 +37,10 @@ public actor SyncCoordinator {
     /// Set once `store.load()` has succeeded. Until then the in-memory library is a placeholder
     /// and must never be written back.
     private var loaded = false
+    /// Look, don't touch: every pass still reads and plans, but the library is not saved and no
+    /// client file is written. This is what the daemon runs in until the user has confirmed the
+    /// first import — see `Settings.importConfirmed`.
+    public private(set) var readOnly: Bool
     public private(set) var lastError: String?
     private var watcher: FileWatcher?
     private var watchTask: Task<Void, Never>?
@@ -55,9 +63,15 @@ public actor SyncCoordinator {
         init(_ h: ClientHealth) { healthy = h.healthy; watched = h.watched; error = h.error }
     }
 
-    public init(store: Store, adapters: [any ClientAdapter], backups: BackupStore, gatewayPort: Int) {
+    public init(store: Store, adapters: [any ClientAdapter], backups: BackupStore, gatewayPort: Int,
+                readOnly: Bool = false) {
         self.store = store; self.adapters = adapters; self.backups = backups; self.gatewayPort = gatewayPort
+        self.readOnly = readOnly
     }
+
+    /// Flipped off once the user confirms the first import; nothing flips it back on. The caller
+    /// is expected to `runOnce()` afterwards — this only lifts the block, it does not sync.
+    public func setReadOnly(_ value: Bool) { readOnly = value }
 
     public func currentLibrary() -> Library { library }
     public func lastSyncError() -> String? { lastError }
@@ -112,6 +126,7 @@ public actor SyncCoordinator {
     @discardableResult
     public func mutate<T: Sendable>(_ f: (inout Library) throws -> T) async throws -> T {
         guard loaded else { throw SyncCoordinatorError.notLoaded }
+        guard !readOnly else { throw SyncCoordinatorError.readOnly }
         let before = library
         let result = try f(&library)
         try store.save(library)
@@ -126,24 +141,19 @@ public actor SyncCoordinator {
         let healthBefore = health.mapValues(HealthKey.init)
         let errorBefore = lastError
         lastError = nil
-        let unwatched = Set(watcher?.unwatched() ?? [])
-        var snapshots: [ClientID: [ExternalServer]] = [:]
-        var reads: [ClientID: Data?] = [:]
-        for a in adapters where a.isInstalled() {
-            do {
-                let data = try a.readData()
-                snapshots[a.id] = try a.parse(data)
-                reads.updateValue(data, forKey: a.id)
-                health[a.id] = ClientHealth(healthy: true, error: nil, lastSync: now,
-                                            watched: !unwatched.contains(a.id))
-            } catch {
-                health[a.id] = ClientHealth(healthy: false, error: String(describing: error),
-                                            lastSync: health[a.id]?.lastSync, watched: !unwatched.contains(a.id))
-            }
-        }
+        let (snapshots, reads) = readClients(now: now)
         let suppressed = skipPresence ? Set(snapshots.keys) : Set(suppressedUntil.filter { $0.value > now }.keys)
         let out = SyncEngine.plan(SyncInput(library: library, snapshots: snapshots, suppressed: suppressed,
                                             gatewayPort: gatewayPort, now: now))
+
+        // Read-only: the plan is still the answer to "what would happen", and the health this pass
+        // gathered is still worth reporting, but nothing about it reaches a file.
+        guard !readOnly else {
+            notifyIfChanged(healthBefore: healthBefore, errorBefore: errorBefore,
+                            planChanged: false, alreadyChanged: alreadyChanged)
+            return out
+        }
+
         let planChanged = out.library != library
         if planChanged {
             library = out.library
@@ -178,16 +188,53 @@ public actor SyncCoordinator {
         }
         if !failures.isEmpty { lastError = failures.joined(separator: "; ") }
 
-        // Health and the last error are as much a part of what subscribers show as the library is,
-        // so a pass that only turns a client red still has something to say.
-        let changed = planChanged || alreadyChanged
-            || health.mapValues(HealthKey.init) != healthBefore || lastError != errorBefore
-        // Off the actor, so one slow listener can't stall the next sync.
-        if changed {
-            let snap = snapshot()
-            for l in listeners.values { Task { l(snap) } }
-        }
+        notifyIfChanged(healthBefore: healthBefore, errorBefore: errorBefore,
+                        planChanged: planChanged, alreadyChanged: alreadyChanged)
         return out
+    }
+
+    /// Reads every installed client, recording health as it goes. Returns what parsed, and the raw
+    /// bytes behind it so a write can be compared against what is already on disk.
+    private func readClients(now: Date) -> (snapshots: [ClientID: [ExternalServer]], reads: [ClientID: Data?]) {
+        let unwatched = Set(watcher?.unwatched() ?? [])
+        var snapshots: [ClientID: [ExternalServer]] = [:]
+        var reads: [ClientID: Data?] = [:]
+        for a in adapters where a.isInstalled() {
+            do {
+                let data = try a.readData()
+                snapshots[a.id] = try a.parse(data)
+                reads.updateValue(data, forKey: a.id)
+                health[a.id] = ClientHealth(healthy: true, error: nil, lastSync: now,
+                                            watched: !unwatched.contains(a.id))
+            } catch {
+                health[a.id] = ClientHealth(healthy: false, error: String(describing: error),
+                                            lastSync: health[a.id]?.lastSync, watched: !unwatched.contains(a.id))
+            }
+        }
+        return (snapshots, reads)
+    }
+
+    /// Health and the last error are as much a part of what subscribers show as the library is,
+    /// so a pass that only turns a client red still has something to say.
+    private func notifyIfChanged(healthBefore: [ClientID: HealthKey], errorBefore: String?,
+                                 planChanged: Bool, alreadyChanged: Bool) {
+        guard planChanged || alreadyChanged
+                || health.mapValues(HealthKey.init) != healthBefore || lastError != errorBefore else { return }
+        // Off the actor, so one slow listener can't stall the next sync.
+        let snap = snapshot()
+        for l in listeners.values { Task { l(snap) } }
+    }
+
+    /// What a sync would do right now, without doing any of it: the plan, plus the snapshots it
+    /// was planned against so a caller can say which entries a write would add, drop or reshape.
+    ///
+    /// Deliberately ignores the suppression window. This answers a question a human asked, not one
+    /// the watcher asked, so a file we happen to have written seconds ago is still fair to read.
+    public func plannedChanges(now: Date = .init()) -> (plan: SyncOutput, snapshots: [ClientID: [ExternalServer]]) {
+        let (snapshots, _) = readClients(now: now)
+        let out = SyncEngine.plan(SyncInput(library: library, snapshots: snapshots, suppressed: [],
+                                            gatewayPort: gatewayPort, now: now))
+        return (out, snapshots)
     }
 
     /// Watch client config files and re-sync on change. Idempotent.

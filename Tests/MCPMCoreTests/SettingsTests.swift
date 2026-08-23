@@ -61,3 +61,17 @@ private func tempRoot() throws -> URL {
     #expect(s.gatewayPort == 8123)
     #expect(s.backupRetention == 5)
 }
+
+/// A fresh install has answered nothing, so the first import is held rather than performed.
+@Test func importIsUnconfirmedUntilSomethingSaysOtherwise() throws {
+    #expect(Settings().importConfirmed == false)
+    let url = try tempRoot().appendingPathComponent("settings.json")
+    try Data(#"{"gatewayPort":8123}"#.utf8).write(to: url)
+    #expect(try SettingsStore(url: url).load().importConfirmed == false)
+}
+
+@Test func importConfirmationSurvivesASaveAndLoad() throws {
+    let store = SettingsStore(url: try tempRoot().appendingPathComponent("settings.json"))
+    try store.save(Settings(importConfirmed: true))
+    #expect(try store.load().importConfirmed)
+}

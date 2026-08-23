@@ -19,6 +19,11 @@ struct MainWindowView: View {
     @State private var query = ""
     @State private var showAdd = false
     @State private var showRemove = false
+    @State private var showOnboarding = false
+    /// Set once the sheet has been offered, so dismissing it doesn't immediately re-present it.
+    /// Not persisted: setup is unfinished until the daemon says otherwise, and the banner is what
+    /// carries that between launches.
+    @State private var offeredOnboarding = false
     /// ⌫ only means "remove" while the grid itself has focus — inside the search field it still
     /// deletes a character.
     @FocusState private var gridFocused: Bool
@@ -46,6 +51,7 @@ struct MainWindowView: View {
         VStack(spacing: 0) {
             header(count: servers.count)
             Hairline()
+            setupBanner
             startupNudge
             content(for: servers)
             banners
@@ -53,11 +59,22 @@ struct MainWindowView: View {
         // On the container, not on the banner: a transition can only animate if the animation
         // outlives the view being inserted or removed.
         .animation(.snappy(duration: 0.2), value: showStartupNudge)
+        .animation(.snappy(duration: 0.2), value: daemon.needsSetup)
         .inspector(isPresented: .constant(true)) {
             InspectorView(serverID: selection, clear: { selection = nil })
                 .inspectorColumnWidth(min: 250, ideal: 280, max: 320)
         }
         .sheet(isPresented: $showAdd) { AddServerSheet().environment(daemon) }
+        .sheet(isPresented: $showOnboarding) {
+            OnboardingSheet().environment(daemon).environment(startup)
+        }
+        // The daemon is the authority on whether setup is finished, and its first status arrives
+        // after this window does — so the sheet waits for the answer rather than for onAppear.
+        .onChange(of: daemon.needsSetup, initial: true) { _, needed in
+            guard needed, !offeredOnboarding else { return }
+            offeredOnboarding = true
+            showOnboarding = true
+        }
         .confirmationDialog("Remove server?", isPresented: $showRemove, presenting: selected) { st in
             Button("Remove \(st.server.name)", role: .destructive) {
                 daemon.remove(st.server.id)
@@ -78,12 +95,40 @@ struct MainWindowView: View {
         }
     }
 
+    // MARK: setup banner
+
+    /// Stays up for as long as the daemon is holding the first import — dismissing the sheet
+    /// postpones the question, it does not answer it, and until it is answered nothing on this
+    /// Mac is being written to.
+    @ViewBuilder private var setupBanner: some View {
+        if daemon.needsSetup {
+            HStack(spacing: Space.s) {
+                Image(systemName: "hand.raised")
+                    .foregroundStyle(.orange)
+                Text("Setup not finished — your configs are untouched until you import.")
+                    .font(Typography.caption)
+                Spacer(minLength: Space.m)
+                Button("Finish setup") { showOnboarding = true }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+            }
+            .padding(.horizontal, Space.l)
+            .padding(.vertical, Space.s)
+            .background(.orange.opacity(0.1))
+            .transition(.move(edge: .top).combined(with: .opacity))
+        }
+    }
+
     // MARK: startup nudge
 
     /// The one thing a fresh install gets wrong on its own: the daemon only runs because the app
     /// started it, so the next reboot comes up with nothing running. Gone the moment the agent is
     /// enabled, whether from here or from System Settings.
-    private var showStartupNudge: Bool { !startup.daemonAtLogin && !dismissedStartupNudge }
+    /// Suppressed while setup is unfinished: the onboarding sheet's first step asks the same
+    /// question, and the setup banner is already holding that spot.
+    private var showStartupNudge: Bool {
+        !startup.daemonAtLogin && !dismissedStartupNudge && !daemon.needsSetup
+    }
     private var needsApproval: Bool { startup.daemonStatus == .requiresApproval }
 
     @ViewBuilder private var startupNudge: some View {

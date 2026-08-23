@@ -44,6 +44,12 @@ final class DaemonClient {
     /// a restart because every client config already points at the port it is bound to.
     var settingsPendingRestart: Bool { status?.settingsPendingRestart ?? false }
 
+    /// Whether the first import has been approved. Optimistic while we have no status: an app that
+    /// opened setup every time it started before the daemon answered would flash it at everyone.
+    var importConfirmed: Bool { status?.importConfirmed ?? true }
+    /// The daemon is reading and planning but writing nothing until setup is finished.
+    var needsSetup: Bool { status != nil && !importConfirmed }
+
     var health: Health {
         guard isConnected, let s = status else { return .error }
         if s.clients.contains(where: { $0.installed && !$0.healthy }) { return .error }
@@ -262,6 +268,32 @@ final class DaemonClient {
             }
         } catch {
             testResults[id] = TestResult(ok: false, error: String(describing: error), durationMs: 0)
+        }
+    }
+
+    // MARK: onboarding
+
+    /// What the first sync would do, without doing any of it. Throws with the daemon's own words,
+    /// which the sheet shows rather than an Import button that would act on nothing.
+    func importPreview() async throws -> SyncPreview {
+        guard case .syncPreview(let p) = try await send(.syncPreview) else {
+            throw ControlClientError.remote("The background service did not return a preview")
+        }
+        return p
+    }
+
+    /// Approves the first import: the daemon records it, leaves read-only mode and syncs. The
+    /// status that follows carries `importConfirmed`, so the caller has nothing to update itself.
+    func confirmImport() async -> Bool {
+        do {
+            _ = try await send(.confirmImport)
+            // The import writes files, so a status push is coming — but asking for one closes the
+            // window in which the sheet's last step still reads as unconfirmed.
+            if case .status(let s) = try await send(.status) { apply(s) }
+            return true
+        } catch {
+            lastError = reason(error)
+            return false
         }
     }
 

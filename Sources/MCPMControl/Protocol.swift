@@ -123,6 +123,44 @@ public struct SetHeaderParams: Codable, Equatable, Sendable {
     }
 }
 
+// MARK: - Import preview
+
+/// One server the first import would take into the library, named the way the onboarding sheet
+/// lists it. Not a `Server`: nothing has been imported yet, so this describes a plan rather than
+/// something that exists.
+public struct ServerSummary: Codable, Equatable, Sendable, Identifiable {
+    public var id: String
+    public var name: String
+    public var kind: ServerKind
+    /// Every client whose config already carries this server.
+    public var clients: [ClientID]
+    public init(id: String, name: String, kind: ServerKind, clients: [ClientID]) {
+        self.id = id; self.name = name; self.kind = kind; self.clients = clients
+    }
+}
+
+/// What the import would do to one client's config file, by server name. `changes` is the one
+/// that matters: it means two clients described the same server differently and one of them is
+/// about to be rewritten to match the other.
+public struct ClientWrite: Codable, Equatable, Sendable, Identifiable {
+    public var client: ClientID
+    public var adds: [String]
+    public var removes: [String]
+    public var changes: [String]
+    public var id: ClientID { client }
+    public init(client: ClientID, adds: [String], removes: [String], changes: [String]) {
+        self.client = client; self.adds = adds; self.removes = removes; self.changes = changes
+    }
+}
+
+public struct SyncPreview: Codable, Equatable, Sendable {
+    public var adopted: [ServerSummary]
+    public var writes: [ClientWrite]
+    public init(adopted: [ServerSummary], writes: [ClientWrite]) {
+        self.adopted = adopted; self.writes = writes
+    }
+}
+
 public enum ControlCommand: Equatable, Sendable {
     case hello(HelloParams)
     case status
@@ -142,6 +180,10 @@ public enum ControlCommand: Equatable, Sendable {
     case authSetHeader(SetHeaderParams)
     case getSettings
     case setSettings(SetSettingsParams)
+    /// What the first import would do, computed but not performed.
+    case syncPreview
+    /// The user has seen the preview and said yes: record it, leave read-only mode, and sync.
+    case confirmImport
 
     public var method: String {
         switch self {
@@ -163,6 +205,8 @@ public enum ControlCommand: Equatable, Sendable {
         case .authSetHeader: "auth.setHeader"
         case .getSettings: "settings.get"
         case .setSettings: "settings.set"
+        case .syncPreview: "sync.preview"
+        case .confirmImport: "sync.confirmImport"
         }
     }
 }
@@ -197,6 +241,8 @@ public struct ControlRequest: Codable, Equatable, Sendable {
         case "auth.setHeader": command = .authSetHeader(try c.decode(SetHeaderParams.self, forKey: .params))
         case "settings.get": command = .getSettings
         case "settings.set": command = .setSettings(try c.decode(SetSettingsParams.self, forKey: .params))
+        case "sync.preview": command = .syncPreview
+        case "sync.confirmImport": command = .confirmImport
         default:
             throw DecodingError.dataCorruptedError(forKey: .method, in: c, debugDescription: "unknown method \(method)")
         }
@@ -218,7 +264,7 @@ public struct ControlRequest: Codable, Equatable, Sendable {
         case .authStart(let p), .authSignOut(let p), .authForget(let p): try c.encode(p, forKey: .params)
         case .authSetHeader(let p): try c.encode(p, forKey: .params)
         case .setSettings(let p): try c.encode(p, forKey: .params)
-        case .status, .subscribe, .listServers, .listClients, .getSettings: break
+        case .status, .subscribe, .listServers, .listClients, .getSettings, .syncPreview, .confirmImport: break
         }
     }
 }
@@ -265,12 +311,17 @@ public struct DaemonStatus: Codable, Equatable, Sendable {
     /// A saved setting the running daemon has not picked up — today only the gateway port, which
     /// cannot be rebound live without stranding every client config that points at the old one.
     public var settingsPendingRestart: Bool
+    /// False while the daemon is holding the first import: it is reading and planning, but saving
+    /// nothing and writing to no client file until the user has seen the preview and said yes.
+    public var importConfirmed: Bool
 
     public init(daemonVersion: String, apiVersion: Int, servers: [ServerStatus], clients: [ClientStatus],
-                lastError: String? = nil, gatewayPort: Int? = nil, settingsPendingRestart: Bool = false) {
+                lastError: String? = nil, gatewayPort: Int? = nil, settingsPendingRestart: Bool = false,
+                importConfirmed: Bool = true) {
         self.daemonVersion = daemonVersion; self.apiVersion = apiVersion
         self.servers = servers; self.clients = clients; self.lastError = lastError
         self.gatewayPort = gatewayPort; self.settingsPendingRestart = settingsPendingRestart
+        self.importConfirmed = importConfirmed
     }
 
     /// `settingsPendingRestart` arrived after the first release. It is not optional in the model —
@@ -285,6 +336,9 @@ public struct DaemonStatus: Codable, Equatable, Sendable {
         lastError = try c.decodeIfPresent(String.self, forKey: .lastError)
         gatewayPort = try c.decodeIfPresent(Int.self, forKey: .gatewayPort)
         settingsPendingRestart = try c.decodeIfPresent(Bool.self, forKey: .settingsPendingRestart) ?? false
+        // A daemon too old to know about onboarding has already imported everything it was ever
+        // going to, so "absent" reads as confirmed — anything else would gate a working install.
+        importConfirmed = try c.decodeIfPresent(Bool.self, forKey: .importConfirmed) ?? true
     }
 }
 
@@ -322,6 +376,7 @@ public enum ControlResult: Codable, Equatable, Sendable {
     case authorizeURL(String)
     case testResult(TestResult)
     case settings(Settings)
+    case syncPreview(SyncPreview)
 }
 
 public struct ControlResponse: Codable, Equatable, Sendable {

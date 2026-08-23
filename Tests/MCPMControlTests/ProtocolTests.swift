@@ -190,3 +190,37 @@ func authAndTestCommandsRoundTrip(command: ControlCommand) throws {
     guard case .addServer(let p) = req.command else { Issue.record("wrong command"); return }
     #expect(p.transport == nil)
 }
+
+@Test(arguments: [ControlCommand.syncPreview, .confirmImport])
+func onboardingCommandsRoundTrip(command: ControlCommand) throws {
+    let data = try JSONEncoder.mcpm.encode(ControlRequest(id: 9, command: command))
+    let obj = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+    #expect(obj["method"] as! String == command.method)
+    #expect(try JSONDecoder.mcpm.decode(ControlRequest.self, from: data).command == command)
+}
+
+@Test func syncPreviewRoundTrips() throws {
+    let preview = SyncPreview(
+        adopted: [ServerSummary(id: "notion", name: "Notion", kind: .remote, clients: [.cursor, .codex])],
+        writes: [ClientWrite(client: .cursor, adds: ["linear"], removes: [], changes: ["notion"])])
+    let result = ControlResult.syncPreview(preview)
+    let data = try JSONEncoder.mcpmWire.encode(result)
+    #expect(try JSONDecoder.mcpm.decode(ControlResult.self, from: data) == result)
+}
+
+/// A daemon that predates onboarding sends no such key, and gating a working install behind a
+/// setup sheet because of a missing field would be the worse of the two readings.
+@Test func aStatusWithoutImportConfirmedReadsAsConfirmed() throws {
+    let json = #"{"daemonVersion":"0.1.0","apiVersion":1,"servers":[],"clients":[]}"#
+    let status = try JSONDecoder.mcpm.decode(DaemonStatus.self, from: Data(json.utf8))
+    #expect(status.importConfirmed)
+    #expect(status.settingsPendingRestart == false)
+}
+
+@Test func aStatusCarriesAnUnconfirmedImportAcrossTheWire() throws {
+    let status = DaemonStatus(daemonVersion: "0.1.0", apiVersion: controlAPIVersion, servers: [],
+                              clients: [], importConfirmed: false)
+    let round = try JSONDecoder.mcpm.decode(DaemonStatus.self, from: JSONEncoder.mcpmWire.encode(status))
+    #expect(round == status)
+    #expect(round.importConfirmed == false)
+}

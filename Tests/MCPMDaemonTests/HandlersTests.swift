@@ -304,3 +304,235 @@ func settingsSetRefusesAPortOutsideTheValidRange(port: Int) async throws {
     try await add(p, to: e.handlers)
     #expect(await e.handlers.status().servers.first { $0.id == "streamy" }?.server.transport == .sse)
 }
+
+// MARK: - Onboarding: preview, hold, confirm
+
+private struct ImportEnv {
+    let root: URL
+    let library: Store
+    let cursor: CursorAdapter
+    let claude: ClaudeCodeAdapter
+    let settings: SettingsStore
+    let handlers: Handlers
+}
+
+/// Two real JSON adapters over temporary files, and a daemon holding its first import.
+private func makeImportEnv(importConfirmed: Bool = false) async throws -> ImportEnv {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("mcpm-i-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: root.appendingPathComponent("cursor"), withIntermediateDirectories: true)
+    let cursor = CursorAdapter(configPath: root.appendingPathComponent("cursor/mcp.json"))
+    let claude = ClaudeCodeAdapter(configPath: root.appendingPathComponent("claude.json"))
+    let library = Store(url: root.appendingPathComponent("servers.json"))
+    let coord = SyncCoordinator(store: library, adapters: [cursor, claude],
+                                backups: BackupStore(root: root.appendingPathComponent("backups")),
+                                gatewayPort: 7337, readOnly: !importConfirmed)
+    let auth = AuthManager(store: FileTokenStore(url: root.appendingPathComponent("tokens.json")),
+                           oauth: OAuthClient(http: OfflineHTTP()),
+                           redirectURI: GatewayConfig(port: 7337).redirectURI())
+    let settings = SettingsStore(url: root.appendingPathComponent("settings.json"))
+    let service = SettingsService(store: settings, initial: Settings(importConfirmed: importConfirmed),
+                                  runningPort: 7337)
+    return ImportEnv(root: root, library: library, cursor: cursor, claude: claude, settings: settings,
+                     handlers: Handlers(coord: coord, auth: auth, gatewayPort: nil, settings: service))
+}
+
+/// The two clients describe "shared" differently. Claude Code sorts first, so its shape wins and
+/// Cursor's file is the one that would be rewritten — the exact thing the user has to be shown.
+private func writeConflictingConfigs(_ e: ImportEnv) throws {
+    try Data(#"{"mcpServers":{"shared":{"command":"claude-version"},"only-claude":{"command":"c"}}}"#.utf8)
+        .write(to: e.claude.configPath)
+    try Data(#"{"mcpServers":{"shared":{"command":"cursor-version"}}}"#.utf8)
+        .write(to: e.cursor.configPath)
+}
+
+private func preview(_ handlers: Handlers) async throws -> SyncPreview {
+    guard case .syncPreview(let p) = try await handlers.handle(ControlRequest(id: 1, command: .syncPreview)) else {
+        throw HandlerError.invalid("expected a preview")
+    }
+    return p
+}
+
+@Test func anUnconfirmedDaemonReportsItAndImportsNothing() async throws {
+    let e = try await makeImportEnv()
+    let before = try Data(#"{"mcpServers":{"a":{"command":"x"}}}"#.utf8)
+    try before.write(to: e.cursor.configPath)
+    try await e.handlers.coord.runOnce()
+
+    let status = await e.handlers.status()
+    #expect(status.importConfirmed == false)
+    #expect(status.servers.isEmpty)
+    #expect(!FileManager.default.fileExists(atPath: e.library.url.path))
+    #expect(try Data(contentsOf: e.cursor.configPath) == before)
+}
+
+@Test func thePreviewNamesEveryServerItWouldAdoptAndTheClientsItFoundThemIn() async throws {
+    let e = try await makeImportEnv()
+    try writeConflictingConfigs(e)
+
+    let p = try await preview(e.handlers)
+    #expect(p.adopted.map(\.name) == ["only-claude", "shared"])
+    #expect(p.adopted.first { $0.name == "only-claude" }?.clients == [.claudeCode])
+    // One library entry, found in both files.
+    #expect(p.adopted.first { $0.name == "shared" }?.clients == [.claudeCode, .cursor])
+    #expect(p.adopted.allSatisfy { $0.kind == .stdio })
+}
+
+/// The gap the whole feature exists to close: without a preview, this rewrite happens on first run
+/// with nobody told about it.
+@Test func thePreviewReportsTheConfigRewriteACollisionWouldCause() async throws {
+    let e = try await makeImportEnv()
+    try writeConflictingConfigs(e)
+
+    let p = try await preview(e.handlers)
+    // Claude Code's own file already says what the library would say, so it is left alone.
+    #expect(p.writes.map(\.client) == [.cursor])
+    let write = try #require(p.writes.first)
+    #expect(write.changes == ["shared"])
+    // A first import spreads nothing: every server keeps the clients it was found in, so
+    // "only-claude" does not appear in Cursor's file and a rewrite is the only thing on offer.
+    #expect(write.adds.isEmpty)
+    #expect(write.removes.isEmpty)
+}
+
+/// The same server under two names is matched by URL and collapses to one library entry, which
+/// means one client's entry is renamed — it disappears under the name that client gave it and
+/// reappears under the other's. Worth naming as an add and a remove rather than a "change".
+@Test func aPreviewNamesAnEntryARenameWouldDropAndTheOneItWouldAdd() async throws {
+    let e = try await makeImportEnv()
+    try Data(#"{"mcpServers":{"notion":{"url":"https://mcp.notion.com/mcp"}}}"#.utf8)
+        .write(to: e.claude.configPath)
+    try Data(#"{"mcpServers":{"notion-mcp":{"url":"https://mcp.notion.com/mcp"}}}"#.utf8)
+        .write(to: e.cursor.configPath)
+
+    let p = try await preview(e.handlers)
+    #expect(p.adopted.map(\.name) == ["notion"])
+    let write = try #require(p.writes.first { $0.client == .cursor })
+    #expect(write.adds == ["notion"])
+    #expect(write.removes == ["notion-mcp"])
+    #expect(write.changes.isEmpty)
+}
+
+/// Nothing to report is a thing the sheet says out loud, so it has to be distinguishable from a
+/// preview that failed.
+@Test func aPreviewOfMatchingConfigsListsNoWrites() async throws {
+    let e = try await makeImportEnv()
+    let same = #"{"mcpServers":{"shared":{"command":"same"}}}"#
+    try Data(same.utf8).write(to: e.claude.configPath)
+    try Data(same.utf8).write(to: e.cursor.configPath)
+
+    let p = try await preview(e.handlers)
+    #expect(p.adopted.map(\.name) == ["shared"])
+    #expect(p.writes.isEmpty)
+}
+
+@Test func askingForAPreviewTwiceStillChangesNothing() async throws {
+    let e = try await makeImportEnv()
+    try writeConflictingConfigs(e)
+    let cursorBefore = try Data(contentsOf: e.cursor.configPath)
+
+    #expect(try await preview(e.handlers) == (try await preview(e.handlers)))
+    #expect(try Data(contentsOf: e.cursor.configPath) == cursorBefore)
+    #expect(!FileManager.default.fileExists(atPath: e.library.url.path))
+}
+
+@Test func confirmingTheImportPerformsItAndRecordsTheAnswer() async throws {
+    let e = try await makeImportEnv()
+    try writeConflictingConfigs(e)
+
+    #expect(try await e.handlers.handle(ControlRequest(id: 1, command: .confirmImport)) == .ack)
+
+    let status = await e.handlers.status()
+    #expect(status.importConfirmed)
+    #expect(status.servers.map(\.server.name).sorted() == ["only-claude", "shared"])
+    #expect(try e.library.load().servers.count == 2)
+    // The rewrite the preview promised, now that it has been agreed to.
+    let cursor = try String(contentsOf: e.cursor.configPath, encoding: .utf8)
+    #expect(cursor.contains("claude-version"))
+    #expect(!cursor.contains("cursor-version"))
+    // And a restart must not ask again.
+    #expect(try e.settings.load().importConfirmed)
+}
+
+/// A held daemon is not a broken one: it answers, it just refuses to write. The refusal has to say
+/// why, since the app puts it in front of the user.
+@Test func aHeldDaemonRefusesMutationsWithAReasonAndAcceptsThemAfterConfirming() async throws {
+    let e = try await makeImportEnv()
+    try Data(#"{"mcpServers":{}}"#.utf8).write(to: e.cursor.configPath)
+    try await e.handlers.coord.runOnce()
+
+    let add = ControlCommand.addServer(AddServerParams(name: "acme", kind: .remote,
+                                                       url: "https://mcp.example.dev/mcp"))
+    await #expect(throws: SyncCoordinatorError.readOnly) {
+        try await e.handlers.handle(ControlRequest(id: 1, command: add))
+    }
+    #expect(SyncCoordinatorError.readOnly.description.contains("setup is not finished"))
+
+    _ = try await e.handlers.handle(ControlRequest(id: 2, command: .confirmImport))
+    #expect(try await e.handlers.handle(ControlRequest(id: 3, command: add)) == .ack)
+    #expect(await e.handlers.status().servers.map(\.id) == ["acme"])
+}
+
+/// Confirming twice is what a double-click on Import looks like from here.
+@Test func confirmingAnAlreadyConfirmedImportIsHarmless() async throws {
+    let e = try await makeImportEnv(importConfirmed: true)
+    try Data(#"{"mcpServers":{"a":{"command":"x"}}}"#.utf8).write(to: e.cursor.configPath)
+
+    _ = try await e.handlers.handle(ControlRequest(id: 1, command: .confirmImport))
+    _ = try await e.handlers.handle(ControlRequest(id: 2, command: .confirmImport))
+    #expect(await e.handlers.status().servers.map(\.id) == ["a"])
+    #expect(await e.handlers.status().importConfirmed)
+}
+
+// MARK: - Migration
+
+/// The upgrade path: an install running before onboarding existed has a library it did not have to
+/// be asked about, and must not come back gated.
+@Test func anExistingLibraryCountsAsAnAnsweredImport() async throws {
+    let e = try await makeImportEnv()
+    try e.library.save(Library(servers: [Server(id: "a", name: "a", kind: .stdio, command: "x",
+                                                source: "manual", createdAt: .init())]))
+
+    let migrated = SettingsService.confirmingExistingInstall(Settings(), library: e.library, into: e.settings)
+    #expect(migrated.importConfirmed)
+    // Written down, so emptying the library later does not re-open the question.
+    #expect(try e.settings.load().importConfirmed)
+}
+
+@Test func aFreshInstallWithNoLibraryIsStillAsked() async throws {
+    let e = try await makeImportEnv()
+    let migrated = SettingsService.confirmingExistingInstall(Settings(), library: e.library, into: e.settings)
+    #expect(migrated.importConfirmed == false)
+    #expect(!FileManager.default.fileExists(atPath: e.settings.url.path))
+}
+
+/// An empty library file is a daemon that has run and found nothing, which is not evidence that
+/// anyone was ever asked.
+@Test func anEmptyLibraryIsNotEvidenceOfAnAnsweredImport() async throws {
+    let e = try await makeImportEnv()
+    try e.library.save(Library())
+    let migrated = SettingsService.confirmingExistingInstall(Settings(), library: e.library, into: e.settings)
+    #expect(migrated.importConfirmed == false)
+}
+
+@Test func migrationLeavesAnAlreadyConfirmedSettingAlone() async throws {
+    let e = try await makeImportEnv()
+    let settings = Settings(gatewayPort: 8080, importConfirmed: true)
+    #expect(SettingsService.confirmingExistingInstall(settings, library: e.library, into: e.settings) == settings)
+}
+
+/// A settings file that did not parse must not be replaced by one the migration invented: the
+/// store throws on a corrupt file precisely so a hand-edited typo survives to be fixed.
+@Test func migrationDoesNotOverwriteASettingsFileItCouldNotRead() async throws {
+    let e = try await makeImportEnv()
+    let corrupt = Data("{ gatewayPort: 8O80".utf8)
+    try corrupt.write(to: e.settings.url)
+    try e.library.save(Library(servers: [Server(id: "a", name: "a", kind: .stdio, command: "x",
+                                                source: "manual", createdAt: .init())]))
+
+    let migrated = SettingsService.confirmingExistingInstall(Settings(), library: e.library,
+                                                             into: e.settings, persist: false)
+    // The install is still not gated…
+    #expect(migrated.importConfirmed)
+    // …and the file the user has to repair is still there to repair.
+    #expect(try Data(contentsOf: e.settings.url) == corrupt)
+}

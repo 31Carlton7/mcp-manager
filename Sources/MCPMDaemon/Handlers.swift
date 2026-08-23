@@ -66,7 +66,8 @@ public struct Handlers: Sendable {
                             servers: servers, clients: clients,
                             lastError: snap.lastError ?? gatewayError
                                 ?? (pending ? SettingsService.restartNote : nil),
-                            gatewayPort: gatewayPort, settingsPendingRestart: pending)
+                            gatewayPort: gatewayPort, settingsPendingRestart: pending,
+                            importConfirmed: await settings.importConfirmed)
     }
 
     public func handle(_ req: ControlRequest) async throws -> ControlResult {
@@ -183,7 +184,46 @@ public struct Handlers: Sendable {
             } catch let e as SettingsService.ValidationError {
                 throw HandlerError.invalid(e.description)
             }
+        case .syncPreview:
+            let (plan, snapshots) = await coord.plannedChanges()
+            return .syncPreview(preview(plan, against: snapshots))
+        case .confirmImport:
+            // Recorded first: read-only mode is derived from this, and a daemon that lifted the
+            // block without persisting the answer would ask again on the next start, after it had
+            // already rewritten the files.
+            try await settings.confirmImport()
+            await coord.setReadOnly(false)
+            try await coord.runOnce()
+            return .ack
         }
+    }
+
+    /// Turns a plan into something a human can be shown before it happens: what would be taken
+    /// into the library, and what each client's file would gain, lose or have rewritten.
+    private func preview(_ plan: SyncOutput, against snapshots: [ClientID: [ExternalServer]]) -> SyncPreview {
+        // The clients come from the planned library rather than from `adopted`, whose entries are
+        // snapshots taken the moment each server was first seen: a server found in three files is
+        // adopted once, by the first of them, and only the library learns about the other two.
+        let adopted = plan.adopted.map { s in
+            let clients = (plan.library.server(id: s.id) ?? s).clients.filter(\.value).keys.sorted()
+            return ServerSummary(id: s.id, name: s.name, kind: s.kind, clients: clients)
+        }
+        let writes = plan.writes.map { client, desired -> ClientWrite in
+            let current = Dictionary(snapshots[client, default: []].map { ($0.name, $0) },
+                                     uniquingKeysWith: { a, _ in a })
+            let after = Dictionary(desired.map { ($0.name, $0) }, uniquingKeysWith: { a, _ in a })
+            return ClientWrite(client: client,
+                               adds: after.keys.filter { current[$0] == nil }.sorted(),
+                               removes: current.keys.filter { after[$0] == nil }.sorted(),
+                               // Same name, different shape: this is the entry one client is about
+                               // to lose its own version of.
+                               changes: after.filter { name, e in
+                                   guard let was = current[name] else { return false }
+                                   return was != e
+                               }.keys.sorted())
+        }
+        return SyncPreview(adopted: adopted.sorted { $0.name < $1.name },
+                           writes: writes.sorted { $0.client < $1.client })
     }
 
     /// The header credential carried by an add, validated here so `servers.add` either produces a

@@ -49,6 +49,40 @@ public actor SettingsService {
 
     public var settings: Settings { current }
 
+    public var importConfirmed: Bool { current.importConfirmed }
+
+    /// Records that the user has approved the first import. Idempotent, and persisted before the
+    /// caller lifts read-only mode: a crash between the two would otherwise leave a daemon that
+    /// has already rewritten client configs still asking to be allowed to.
+    public func confirmImport() throws {
+        guard !current.importConfirmed else { return }
+        var next = current
+        next.importConfirmed = true
+        try store.save(next)
+        current = next
+    }
+
+    /// The migration for installs that predate `importConfirmed`: they have a library the daemon
+    /// built for them, so the question has effectively been answered, and gating them behind an
+    /// onboarding sheet would take a working setup off the air. A library with servers in it is
+    /// the evidence; an unreadable one is not, and is left to be asked about.
+    ///
+    /// `persist` is false when the settings file on disk did not parse. The inference still holds —
+    /// the install is clearly an old one and must not be gated — but writing it back would replace
+    /// a file the user hand-edited and mistyped with defaults, which is the very thing
+    /// `SettingsStore.load()` throws rather than do. The inference simply runs again next start.
+    public static func confirmingExistingInstall(_ settings: Settings, library: Store,
+                                                 into store: SettingsStore, persist: Bool = true) -> Settings {
+        guard !settings.importConfirmed,
+              let contents = try? library.load(), !contents.servers.isEmpty else { return settings }
+        var next = settings
+        next.importConfirmed = true
+        // Best effort even so: a settings file we cannot write is not a reason to gate an install
+        // that has clearly been running for a while.
+        if persist { try? store.save(next) }
+        return next
+    }
+
     public var pendingRestart: Bool {
         !portOverriddenByEnvironment && current.gatewayPort != runningPort
     }

@@ -6,14 +6,30 @@ import MCPMCore
 /// hosts, otherwise a tinted monogram. The monogram draws immediately and the favicon cross-fades
 /// in once it has been fetched, so rows never wait on the network.
 struct ServerIcon: View {
-    let server: Server
+    /// The fields an icon is resolved from, rather than a whole `Server`: the onboarding preview
+    /// describes servers that do not exist in the library yet and has only a name and a kind.
+    let name: String
+    let kind: ServerKind
+    var url: String?
+    var command: String?
+    var args: [String] = []
     var size: CGFloat = 26
+
+    init(server: Server, size: CGFloat = 26) {
+        self.init(name: server.name, kind: server.kind, url: server.url,
+                  command: server.command, args: server.args, size: size)
+    }
+
+    init(name: String, kind: ServerKind, url: String? = nil, command: String? = nil,
+         args: [String] = [], size: CGFloat = 26) {
+        self.name = name; self.kind = kind; self.url = url; self.command = command
+        self.args = args; self.size = size
+    }
 
     @State private var favicon: NSImage?
 
     private var source: IconSource {
-        IconSource.resolve(name: server.name, kind: server.kind, url: server.url,
-                           command: server.command, args: server.args)
+        IconSource.resolve(name: name, kind: kind, url: url, command: command, args: args)
     }
 
     private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: size * 0.27, style: .continuous) }
@@ -26,8 +42,8 @@ struct ServerIcon: View {
 
     @ViewBuilder private var content: some View {
         switch source {
-        case .symbol(let name):
-            symbolTile(name)
+        case .symbol(let symbol):
+            symbolTile(symbol)
         case .monogram(let text, let hue):
             monogramTile(text, hue: hue)
         case .favicon(let hosts):
@@ -43,7 +59,7 @@ struct ServerIcon: View {
                         .frame(width: size, height: size)
                         .clipShape(shape)
                 } else {
-                    monogramTile(IconSource.monogram(for: server.name), hue: IconSource.hue(server.name))
+                    monogramTile(IconSource.monogram(for: name), hue: IconSource.hue(name))
                 }
             }
                 .animation(.easeOut(duration: 0.18), value: favicon != nil)
@@ -54,11 +70,11 @@ struct ServerIcon: View {
         }
     }
 
-    private func symbolTile(_ name: String) -> some View {
-        let tint = Self.tint(hue: IconSource.hue(server.name))
+    private func symbolTile(_ symbol: String) -> some View {
+        let tint = Self.tint(hue: IconSource.hue(name))
         return shape.fill(tint.opacity(0.16))
             .overlay {
-                Image(systemName: name)
+                Image(systemName: symbol)
                     .font(.system(size: size * 0.5, weight: .medium))
                     .foregroundStyle(tint)
             }

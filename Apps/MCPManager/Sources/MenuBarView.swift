@@ -17,6 +17,11 @@ extension DaemonClient.Health {
 /// the badge is what reliably carries a warning or an error into the menu bar.
 struct MenuBarLabel: View {
     @Environment(DaemonClient.self) private var daemon
+    @Environment(\.openWindow) private var openWindow
+
+    /// Once per launch. A user who closes the setup window has said "not now" for this run; the
+    /// popover's row and the window's banner are what keep asking after that.
+    @State private var offeredSetup = false
 
     var body: some View {
         Image(systemName: "powerplug.fill")
@@ -29,6 +34,14 @@ struct MenuBarLabel: View {
                 }
             }
             .onAppear { daemon.start() }
+            // This view is the only one built at launch — the popover's content isn't — so it is
+            // where an unfinished setup has to be noticed. The window presents the sheet itself.
+            .onChange(of: daemon.needsSetup) { _, needed in
+                guard needed, !offeredSetup else { return }
+                offeredSetup = true
+                openWindow(id: "main")
+                NSApp.activate()
+            }
     }
 }
 
@@ -47,6 +60,7 @@ struct MenuBarView: View {
         VStack(alignment: .leading, spacing: Space.m) {
             header
             heroes
+            setupRow
             Hairline()
             TextTabs(Tab.allCases, selection: $tab, title: \.rawValue)
             list
@@ -133,6 +147,30 @@ struct MenuBarView: View {
         }
         .opacity(daemon.isConnected ? 1 : 0.4)
         .animation(.snappy(duration: 0.2), value: daemon.isConnected)
+    }
+
+    /// Setup lives in the main window — this is the one line of it the popover carries, since the
+    /// hero numbers above read as zero for a reason the user is owed.
+    @ViewBuilder private var setupRow: some View {
+        if daemon.needsSetup {
+            Button { open() } label: {
+                HStack(spacing: Space.xs) {
+                    Image(systemName: "hand.raised")
+                    Text("Setup not finished — nothing has been imported")
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Spacer(minLength: Space.xs)
+                    Text("Finish setup ↗")
+                }
+                .font(Typography.caption)
+                .padding(.horizontal, Space.s)
+                .padding(.vertical, 5)
+                .background(.orange.opacity(0.14), in: .rect(cornerRadius: 8, style: .continuous))
+                .contentShape(.rect)
+            }
+            .buttonStyle(.pressable)
+            .foregroundStyle(.orange)
+        }
     }
 
     // MARK: list
