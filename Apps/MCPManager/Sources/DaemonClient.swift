@@ -221,10 +221,15 @@ final class DaemonClient {
     /// Adds and waits, answering with the new server's id — which the daemon mints and only
     /// reports through the status that follows, so it is found again as the server that wasn't
     /// there before. The Add sheet needs it to offer the sign-in a fresh OAuth server waits on.
+    ///
+    /// On the aux link, because the daemon may inspect the URL on its way in and that dials the
+    /// internet: on the ordered connection a slow endpoint would hold every toggle behind it for
+    /// as long as the probe takes. `auxSend`'s status barrier still puts this after every mutation
+    /// issued before it.
     @discardableResult
     func addAwaiting(_ p: AddServerParams) async throws -> String? {
         let existing = Set((status?.servers ?? []).map(\.id))
-        _ = try await send(.addServer(p))
+        _ = try await auxSend(.addServer(p), retryOnDroppedLink: false)
         // The add syncs, so a status is already on its way; asking closes the gap in which the
         // sheet would look for a server the app has not been told about yet.
         if case .status(let s) = try await send(.status) { apply(s) }
@@ -383,7 +388,12 @@ final class DaemonClient {
     /// A slow call, off the ordered connection. The cheap `status` first is the barrier: it is the
     /// last thing in the ordered queue, so when it answers, every mutation issued before this call
     /// — the `auth` switch a sign-in depends on — has already been applied.
-    private func auxSend(_ cmd: ControlCommand) async throws -> ControlResult {
+    ///
+    /// `retryOnDroppedLink` is for the commands that can be asked twice. A command that changes
+    /// the library cannot: the link dying after the daemon acted on it and before the answer got
+    /// back is indistinguishable from it never arriving, and asking again would add the server
+    /// twice.
+    private func auxSend(_ cmd: ControlCommand, retryOnDroppedLink: Bool = true) async throws -> ControlResult {
         _ = try await send(.status)
         let generation = auxGeneration
         do {
@@ -394,6 +404,7 @@ final class DaemonClient {
             // Otherwise the link died in the gap between the send leaving and the drain noticing.
             // Guarded by the generation, so this can't drop a connection someone else just made.
             auxDisconnected(generation)
+            guard retryOnDroppedLink else { throw error }
             return try await auxRequest(cmd)
         }
     }

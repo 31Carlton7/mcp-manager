@@ -146,17 +146,18 @@ struct CatalogView: View {
         content.frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    /// Whether the library already has this server: the same endpoint, the same command line, or
-    /// the same name. Nothing stops a second copy — the daemon would take it — but a card that
-    /// says "Added" is the answer to the question the user is actually asking.
+    /// Whether the library already has this server: the same endpoint or the same command line,
+    /// and failing both, the same name — but only against a server of the same kind, so a local
+    /// `github` can't hide the hosted one. Nothing stops a second copy; a card that says "Added"
+    /// is just the answer to the question the user is actually asking.
     private func alreadyInLibrary(_ entry: CatalogEntry) -> Bool {
         daemon.servers.contains { status in
             let server = status.server
-            if server.name.caseInsensitiveCompare(entry.name) == .orderedSame { return true }
-            if let url = entry.url, let mine = server.url { return endpoint(url) == endpoint(mine) }
-            guard entry.kind == .stdio, let command = entry.command, let mine = server.command
-            else { return false }
-            return basename(mine) == basename(command) && server.args == entry.args
+            guard server.kind == entry.kind else { return false }
+            if let url = entry.url, let mine = server.url, endpoint(url) == endpoint(mine) { return true }
+            if let command = entry.command, let mine = server.command,
+               basename(mine) == basename(command), server.args == entry.args { return true }
+            return server.name.caseInsensitiveCompare(entry.name) == .orderedSame
         }
     }
 

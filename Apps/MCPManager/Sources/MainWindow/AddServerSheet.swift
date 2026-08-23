@@ -81,6 +81,17 @@ struct AddServerSheet: View {
     /// would refuse the add anyway; saying so here saves the round trip and offers the way out.
     private var notAnEndpoint: Bool { inspection?.parsedVerdict == .notMCP }
 
+    /// A settled answer about this exact URL: the check has finished, it was about the URL being
+    /// added, and it found an endpoint. The daemon inspects again on its way in unless told not
+    /// to, and that second probe is a network round trip the add sits on top of — so when the
+    /// answer is already in hand, it is sent along instead of asked for twice.
+    private func settledInspection(for server: ExternalServer) -> URLInspection? {
+        guard server.kind == .remote, !checking, remoteURL == server.url,
+              let inspection, inspection.parsedVerdict == .mcpEndpoint
+        else { return nil }
+        return inspection
+    }
+
     private var canAdd: Bool {
         guard !parsed.servers.isEmpty, !adding, !checking, !notAnEndpoint else { return false }
         return single == nil || !trimmedName.isEmpty
@@ -289,8 +300,9 @@ struct AddServerSheet: View {
         inspection = nil
         inspectionError = nil
         // A different URL is a different server, so an auth kind chosen for the last one no longer
-        // stands in the way of what this one reports.
-        authEdited = false
+        // stands in the way of what this one reports — except a catalog entry's own kind, which is
+        // curated knowledge about this very URL rather than a leftover from another one.
+        authEdited = prefill.map { $0.auth != .none && $0.url == remoteURL } ?? false
         guard let url = remoteURL else { checking = false; return }
         checking = true
         try? await Task.sleep(for: .milliseconds(400))
@@ -581,10 +593,13 @@ struct AddServerSheet: View {
             for request in requests {
                 do {
                     let id = try await daemon.addAwaiting(request)
-                    // Only the last one of a batch is offered, and a batch is all `auth: .none`
-                    // anyway — the sheet only offers auth for a single server.
-                    if request.auth == .oauth, let id {
-                        signIn = AddedServer(id: id, name: request.name)
+                    // What the daemon stored, not what was asked for: it inspects the URL itself
+                    // and can land on an auth kind the form didn't send. Only the last of a batch
+                    // is offered, and a batch is all `auth: .none` anyway — the sheet offers auth
+                    // for a single server only.
+                    if let added = daemon.servers.first(where: { $0.id == id })?.server,
+                       added.auth == .oauth {
+                        signIn = AddedServer(id: added.id, name: added.name)
                     }
                 } catch {
                     addError = reason(error)
@@ -608,6 +623,7 @@ struct AddServerSheet: View {
         // The credential travels with the add: the daemon mints the id, so it is the only one that
         // can name the server the credential belongs to.
         let credential = kind == .header && !trimmedHeaderName.isEmpty && !headerValue.isEmpty
+        let settled = settledInspection(for: server)
         return AddServerParams(name: trimmedName, kind: server.kind, command: server.command,
                                args: server.kind == .stdio ? SmartPasteParser.shellSplit(argsText) : [],
                                env: server.kind == .stdio ? dictionary(envRows) : [:],
@@ -616,10 +632,13 @@ struct AddServerSheet: View {
                                // What the endpoint answered to beats what the paste guessed: an
                                // SSE server behind a URL that doesn't say so is exactly the case
                                // the check exists for.
-                               transport: inspection?.transport ?? server.transport ?? prefill?.transport,
+                               transport: settled?.transport ?? server.transport ?? prefill?.transport,
                                auth: kind, clients: clients,
                                headerName: credential ? trimmedHeaderName : nil,
-                               headerValue: credential ? headerValue : nil)
+                               headerValue: credential ? headerValue : nil,
+                               // Everything the daemon would go and find out is already on this
+                               // form — the auth kind from the same answer, editable since.
+                               autoDetectAuth: settled == nil)
     }
 
     /// Rows with a blank key are the half-typed ones; they are dropped rather than sent as "".
