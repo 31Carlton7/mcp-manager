@@ -1,0 +1,263 @@
+import Testing
+import Foundation
+import HTTPTypes
+import Hummingbird
+import MCPMCore
+import NIOCore
+@testable import MCPMGateway
+
+// MARK: - Fakes
+
+/// The JSON-RPC answers the fakes give, shared with the legacy-SSE fake below.
+private func rpcResult(for method: String?, params: [String: Any]) -> [String: Any]? {
+    switch method {
+    case "initialize":
+        return ["protocolVersion": params["protocolVersion"] as? String ?? "?",
+                "capabilities": ["tools": [String: Any]()],
+                "serverInfo": ["name": "fake-remote", "version": "2.3"]]
+    case "tools/list":
+        return ["tools": [["name": "search"], ["name": "fetch"]]]
+    default:
+        return nil
+    }
+}
+
+private func rpcResponse(to buffer: ByteBuffer) -> (id: Any?, data: Data?) {
+    let message = (try? JSONSerialization.jsonObject(with: Data(buffer.readableBytesView))) as? [String: Any]
+    guard let id = message?["id"] else { return (nil, nil) }
+    let payload: [String: Any] = ["jsonrpc": "2.0", "id": id,
+                                  "result": rpcResult(for: message?["method"] as? String,
+                                                      params: message?["params"] as? [String: Any] ?? [:]) as Any]
+    return (id, try? JSONSerialization.data(withJSONObject: payload))
+}
+
+/// A Streamable-HTTP endpoint at `/mcp` that answers in plain JSON.
+private func mcpRoute(_ router: Router<BasicRequestContext>, path: String = "/mcp") {
+    router.post(RouterPath(path)) { request, _ in
+        let buffer = try await request.body.collect(upTo: 1024 * 1024)
+        let (_, data) = rpcResponse(to: buffer)
+        guard let data else { return Response(status: .accepted, body: .init()) }
+        return Response(status: .ok, headers: [.contentType: "application/json"],
+                        body: .init(byteBuffer: ByteBuffer(bytes: data)))
+    }
+}
+
+/// A docs page: it is there, it answers, and it is not an MCP server.
+private func htmlRoute(_ router: Router<BasicRequestContext>, path: String) {
+    router.post(RouterPath(path)) { _, _ in
+        Response(status: .methodNotAllowed, headers: [.contentType: "text/html; charset=utf-8"],
+                 body: .init(byteBuffer: ByteBuffer(string: "<!doctype html><html><body>docs</body></html>")))
+    }
+    router.get(RouterPath(path)) { _, _ in
+        Response(status: .ok, headers: [.contentType: "text/html; charset=utf-8"],
+                 body: .init(byteBuffer: ByteBuffer(string: "<!doctype html><html><body>docs</body></html>")))
+    }
+}
+
+/// An endpoint that refuses without a token, the way PostHog's does: a `WWW-Authenticate` naming
+/// the protected-resource metadata, and metadata that names an authorization server.
+private func protectedRoute(_ router: Router<BasicRequestContext>, publishMetadata: Bool) {
+    router.post("/mcp") { request, _ in
+        let host = request.head.authority ?? "127.0.0.1"
+        let prm = "http://\(host)/.well-known/oauth-protected-resource/mcp"
+        var headers = HTTPFields()
+        headers[.contentType] = "application/json"
+        headers[HTTPField.Name("WWW-Authenticate")!] = #"Bearer resource_metadata="\#(prm)""#
+        return Response(status: .unauthorized, headers: headers,
+                        body: .init(byteBuffer: ByteBuffer(string: #"{"error":"invalid_token"}"#)))
+    }
+    guard publishMetadata else { return }
+    router.get("/.well-known/oauth-protected-resource/mcp") { request, _ in
+        let host = request.head.authority ?? "127.0.0.1"
+        let json = """
+            {"resource":"http://\(host)/mcp","authorization_servers":["https://as.example.com"]}
+            """
+        return Response(status: .ok, headers: [.contentType: "application/json"],
+                        body: .init(byteBuffer: ByteBuffer(string: json)))
+    }
+}
+
+private actor SSEBus {
+    private var cont: AsyncStream<String>.Continuation?
+    func attach(_ c: AsyncStream<String>.Continuation) { cont = c }
+    func send(_ s: String) { cont?.yield(s) }
+    func finish() { cont?.finish() }
+}
+
+/// The 2024-11-05 HTTP+SSE transport: a GET that names a message endpoint and then carries every
+/// response back down the same stream.
+private func legacySSERoutes(_ router: Router<BasicRequestContext>, path: String = "/sse") {
+    let bus = SSEBus()
+    router.get(RouterPath(path)) { _, _ in
+        let (stream, cont) = AsyncStream<String>.makeStream()
+        await bus.attach(cont)
+        return Response(status: .ok, headers: [.contentType: "text/event-stream"],
+                        body: .init(contentLength: nil) { writer in
+            try await writer.write(ByteBuffer(string: "event: endpoint\ndata: /messages?sessionId=abc\n\n"))
+            for await chunk in stream { try await writer.write(ByteBuffer(string: chunk)) }
+            try await writer.finish(nil)
+        })
+    }
+    router.post("/messages") { request, _ in
+        let buffer = try await request.body.collect(upTo: 1024 * 1024)
+        let message = (try? JSONSerialization.jsonObject(with: Data(buffer.readableBytesView))) as? [String: Any]
+        let (_, data) = rpcResponse(to: buffer)
+        if let data {
+            await bus.send("event: message\ndata: \(String(decoding: data, as: UTF8.self))\n\n")
+        }
+        // tools/list is the last thing the probe asks for; closing here keeps the fake from
+        // holding a stream open past the end of the test.
+        if message?["method"] as? String == "tools/list" { await bus.finish() }
+        return Response(status: .accepted, body: .init())
+    }
+}
+
+private func withServer(_ configure: (Router<BasicRequestContext>) -> Void,
+                        _ body: (URL) async throws -> Void) async throws {
+    let router = Router()
+    configure(router)
+    let server = TestHTTPServer()
+    try await server.start(router)
+    let base = await server.baseURL
+    do { try await body(base) } catch { await server.stop(); throw error }
+    await server.stop()
+}
+
+// MARK: - inspect
+
+@Test func anEndpointThatAnswersInitializeIsIdentifiedAsOne() async throws {
+    try await withServer({ mcpRoute($0) }) { base in
+        let result = await MCPProbe.inspect(url: base.appendingPathComponent("mcp"))
+
+        #expect(result.verdict == .mcpEndpoint)
+        #expect(result.transport == .http)
+        #expect(!result.authRequired)
+        #expect(result.authKind == AuthKind.none)
+        #expect(result.serverName == "fake-remote")
+        #expect(result.serverVersion == "2.3")
+        #expect(result.suggestion == nil)
+    }
+}
+
+@Test func aRefusalThatNamesProtectedResourceMetadataIsOAuth() async throws {
+    try await withServer({ protectedRoute($0, publishMetadata: true) }) { base in
+        let url = base.appendingPathComponent("mcp")
+        let result = await MCPProbe.inspect(url: url)
+
+        #expect(result.verdict == .mcpEndpoint)
+        #expect(result.transport == .http)
+        #expect(result.authRequired)
+        #expect(result.authKind == .oauth)
+        #expect(result.statusCode == 401)
+        #expect(result.resourceMetadataURL?.hasSuffix("/.well-known/oauth-protected-resource/mcp") == true)
+    }
+}
+
+/// No metadata anywhere: the endpoint wants a credential, and the only kind we can offer without
+/// an authorization server to talk to is a header the user pastes.
+@Test func aRefusalWithNoMetadataFallsBackToHeaderAuth() async throws {
+    try await withServer({ protectedRoute($0, publishMetadata: false) }) { base in
+        let result = await MCPProbe.inspect(url: base.appendingPathComponent("mcp"))
+
+        #expect(result.verdict == .mcpEndpoint)
+        #expect(result.authRequired)
+        #expect(result.authKind == .header)
+    }
+}
+
+/// The bug this whole plan came from: a docs page pasted into the Add sheet.
+@Test func aDocsPageIsNotAnEndpointAndTheSiblingEndpointIsSuggested() async throws {
+    try await withServer({ router in
+        htmlRoute(router, path: "/docs/model-context-protocol")
+        mcpRoute(router)
+    }) { base in
+        let result = await MCPProbe.inspect(url: base.appendingPathComponent("docs/model-context-protocol"))
+
+        #expect(result.verdict == .notMCP)
+        #expect(result.statusCode == 405)
+        #expect(result.contentType?.contains("text/html") == true)
+        #expect(result.suggestion == base.appendingPathComponent("mcp"))
+    }
+}
+
+@Test func aPageWithNoEndpointAnywhereNearItGetsNoSuggestion() async throws {
+    try await withServer({ htmlRoute($0, path: "/docs") }) { base in
+        let result = await MCPProbe.inspect(url: base.appendingPathComponent("docs"))
+
+        #expect(result.verdict == .notMCP)
+        #expect(result.suggestion == nil)
+    }
+}
+
+@Test func aLegacySSEEndpointIsIdentifiedByItsEndpointEvent() async throws {
+    try await withServer({ legacySSERoutes($0) }) { base in
+        let result = await MCPProbe.inspect(url: base.appendingPathComponent("sse"))
+
+        #expect(result.verdict == .mcpEndpoint)
+        #expect(result.transport == .sse)
+        #expect(!result.authRequired)
+    }
+}
+
+@Test func nothingListeningIsUnreachableRatherThanNotAnEndpoint() async {
+    let result = await MCPProbe.inspect(url: URL(string: "http://127.0.0.1:1/mcp")!, timeout: .seconds(5))
+
+    #expect(result.verdict == .unreachable)
+    #expect(result.suggestion == nil)
+    #expect(!result.detail.isEmpty)
+}
+
+@Test func anInspectionSurvivesTheControlProtocolsJSON() throws {
+    let inspection = URLInspection(verdict: .mcpEndpoint, transport: .sse, authRequired: true,
+                                   authKind: .oauth, resourceMetadataURL: "https://x.dev/.well-known/y",
+                                   serverName: "n", serverVersion: "1", toolCount: 3, statusCode: 401,
+                                   contentType: "application/json",
+                                   suggestion: URL(string: "https://mcp.x.dev/mcp"), detail: "d")
+    let round = try JSONDecoder().decode(URLInspection.self, from: JSONEncoder().encode(inspection))
+    #expect(round == inspection)
+}
+
+// MARK: - Legacy SSE in `remote`
+
+@Test func testConnectionWorksAgainstALegacySSEServer() async throws {
+    try await withServer({ legacySSERoutes($0) }) { base in
+        let result = await MCPProbe.remote(url: base.appendingPathComponent("sse"), transport: .sse)
+
+        #expect(result.ok)
+        #expect(result.serverName == "fake-remote")
+        #expect(result.serverVersion == "2.3")
+        #expect(result.toolCount == 2)
+        #expect(result.error == nil)
+    }
+}
+
+/// A library server recorded before transports were known says nothing about which one it speaks.
+/// The POST comes back 405, and the probe tries the legacy flow rather than reporting that.
+@Test func aServerWithNoRecordedTransportFallsBackToTheLegacyFlow() async throws {
+    try await withServer({ router in
+        router.post("/sse") { _, _ in Response(status: .methodNotAllowed, body: .init()) }
+        legacySSERoutes(router)
+    }) { base in
+        let result = await MCPProbe.remote(url: base.appendingPathComponent("sse"), transport: nil)
+
+        #expect(result.ok)
+        #expect(result.toolCount == 2)
+    }
+}
+
+/// The message endpoint an SSE server names is where our headers get sent; a server that points it
+/// at another host must not be followed there.
+@Test func aMessageEndpointOnAnotherOriginIsRefused() async throws {
+    try await withServer({ router in
+        router.get("/sse") { _, _ in
+            Response(status: .ok, headers: [.contentType: "text/event-stream"],
+                     body: .init(byteBuffer: ByteBuffer(string: "event: endpoint\ndata: https://evil.example/messages\n\n")))
+        }
+    }) { base in
+        let result = await MCPProbe.remote(url: base.appendingPathComponent("sse"), transport: .sse,
+                                           timeout: .seconds(5))
+
+        #expect(!result.ok)
+        #expect(result.error?.contains("evil.example") == true)
+    }
+}

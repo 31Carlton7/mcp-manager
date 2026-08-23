@@ -218,8 +218,8 @@ public enum MCPProbe {
     /// Sends one request. With an `id`, reads the body only until that response has been parsed —
     /// a Streamable-HTTP server is allowed to hold its SSE stream open long after it has answered,
     /// and waiting for the end of it would hang the probe. With no `id` the body is left unread.
-    private static func send(_ session: URLSession, _ request: URLRequest,
-                             expecting id: Int?) async throws -> (HTTPURLResponse, [String: Any]?) {
+    static func send(_ session: URLSession, _ request: URLRequest,
+                     expecting id: Int?) async throws -> (HTTPURLResponse, [String: Any]?) {
         let (bytes, response) = try await session.bytes(for: request)
         guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
         let contentType = http.value(forHTTPHeaderField: "Content-Type")
@@ -248,12 +248,34 @@ public enum MCPProbe {
         return (http, responseObject(id: id, in: Data(text.utf8), contentType: contentType))
     }
 
-    public static func remote(url: URL, headers: [String: String] = [:],
+    /// `transport` is what the library recorded for the server. `.sse` goes straight to the legacy
+    /// flow; nil means "never recorded", which is the case for every server imported before
+    /// transports were, so the POST is tried first and the legacy flow is the fallback.
+    public static func remote(url: URL, headers: [String: String] = [:], transport: Transport? = nil,
                               timeout: Duration = .seconds(10)) async -> ProbeResult {
         let start = ContinuousClock.now
-        var r = await remoteImpl(url: url, headers: headers, timeout: timeout)
+        var r: ProbeResult
+        if transport == .sse {
+            r = await remoteSSEImpl(url: url, headers: headers, timeout: timeout)
+        } else {
+            r = await remoteImpl(url: url, headers: headers, timeout: timeout)
+            if !r.ok, looksLikeLegacyTransport(r.error) {
+                let legacy = await remoteSSEImpl(url: url, headers: headers, timeout: timeout)
+                if legacy.ok { r = legacy }
+            }
+        }
         r.durationMs = millis(since: start)
         return r
+    }
+
+    /// The failures worth a second attempt over the legacy transport: a server that only speaks it
+    /// refuses the POST outright. A refusal, a timeout or a dead host says nothing about transports
+    /// and is reported as it stands.
+    static func looksLikeLegacyTransport(_ error: String?) -> Bool {
+        switch error {
+        case "HTTP 404", "HTTP 405", "HTTP 400", "HTTP 406", "could not parse initialize response": true
+        default: false
+        }
     }
 
     static func remoteImpl(url: URL, headers: [String: String], timeout: Duration) async -> ProbeResult {
@@ -336,6 +358,174 @@ public enum MCPProbe {
             result = partial   // identified, the rest just never arrived
             return result
         }
+        result.error = "timed out"
+        return result
+    }
+
+    // MARK: - Remote (legacy HTTP+SSE)
+
+    /// One SSE event, reassembled from the lines of a stream.
+    struct SSEEvent {
+        var name: String?
+        var data: [String]
+    }
+
+    /// Reads `bytes.lines` as SSE. `AsyncLineSequence` drops the blank line that ends an event, so
+    /// an event is finished when what it carries can be read: an `endpoint` event is one line, and
+    /// a `message` event ends when its `data:` lines parse.
+    static func sseEvents(_ lines: AsyncLineSequence<URLSession.AsyncBytes>) -> AsyncThrowingStream<SSEEvent, any Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                var name: String?
+                var data: [String] = []
+                do {
+                    for try await line in lines {
+                        if line.hasPrefix("event:") {
+                            name = String(line.dropFirst(6)).trimmingCharacters(in: .whitespaces)
+                            data.removeAll()
+                            continue
+                        }
+                        guard line.hasPrefix("data:") else { continue }
+                        data.append(String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces))
+                        if name == "endpoint" || sseObject(data) != nil {
+                            continuation.yield(SSEEvent(name: name, data: data))
+                            name = nil
+                            data.removeAll()
+                        }
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    /// The message endpoint an SSE server names, resolved against the stream's URL. Kept on the
+    /// stream's own origin: that address is where this probe's headers — an API key, in the common
+    /// case — are about to be posted, and a server does not get to redirect them elsewhere.
+    static func messageEndpoint(_ raw: String, stream url: URL) throws -> URL {
+        guard let resolved = URL(string: raw, relativeTo: url)?.absoluteURL else {
+            throw ProbeFailure("the server named an unusable message endpoint: \(raw)")
+        }
+        guard resolved.scheme == url.scheme, resolved.host == url.host, resolved.port == url.port else {
+            throw ProbeFailure("the server pointed its message endpoint at another host: \(resolved.host ?? raw)")
+        }
+        return resolved
+    }
+
+    struct ProbeFailure: Error, CustomStringConvertible {
+        var description: String
+        init(_ description: String) { self.description = description }
+    }
+
+    /// The 2024-11-05 transport: GET opens a stream, the server answers with an `endpoint` event
+    /// naming where to post, and every response comes back down the stream rather than as the
+    /// body of the POST that asked for it.
+    static func remoteSSEImpl(url: URL, headers: [String: String], timeout: Duration) async -> ProbeResult {
+        var result = ProbeResult(ok: false, durationMs: 0)
+
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = seconds(timeout)
+        config.timeoutIntervalForResource = seconds(timeout)
+        config.httpShouldSetCookies = false
+        config.urlCache = nil
+        let session = URLSession(configuration: config, delegate: NoRedirectDelegate(), delegateQueue: nil)
+        defer { session.invalidateAndCancel() }
+
+        let progress = Progress()
+        let flow = Task { () -> ProbeResult in
+            var partial = ProbeResult(ok: false, durationMs: 0)
+
+            /// Posts one message to the endpoint the server named. The answer arrives on the
+            /// stream, so the response body here is drained and discarded.
+            func post(_ message: [String: Any], to endpoint: URL) async throws {
+                var req = URLRequest(url: endpoint)
+                req.httpMethod = "POST"
+                req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                req.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
+                for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
+                req.httpBody = encode(message)
+                let (bytes, response) = try await session.bytes(for: req)
+                for try await _ in bytes {}
+                let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+                guard (200...299).contains(status) else {
+                    throw ProbeFailure(status == 401 || status == 403 ? "needs sign-in" : "HTTP \(status)")
+                }
+            }
+
+            var open = URLRequest(url: url)
+            open.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+            for (k, v) in headers { open.setValue(v, forHTTPHeaderField: k) }
+
+            let bytes: URLSession.AsyncBytes
+            let response: URLResponse
+            do {
+                (bytes, response) = try await session.bytes(for: open)
+            } catch {
+                partial.error = (error as NSError).localizedDescription
+                return partial
+            }
+            guard let http = response as? HTTPURLResponse else {
+                partial.error = "not an HTTP response"; return partial
+            }
+            switch http.statusCode {
+            case 200...299: break
+            case 401, 403: partial.error = "needs sign-in"; return partial
+            default: partial.error = "HTTP \(http.statusCode)"; return partial
+            }
+            guard http.value(forHTTPHeaderField: "Content-Type")?.lowercased()
+                .contains("text/event-stream") == true else {
+                partial.error = "the server did not open an event stream"; return partial
+            }
+
+            var endpoint: URL?
+            do {
+                for try await event in sseEvents(bytes.lines) {
+                    if event.name == "endpoint" {
+                        guard let raw = event.data.first else { continue }
+                        let resolved = try messageEndpoint(raw, stream: url)
+                        endpoint = resolved
+                        try await post(initializeMessage(), to: resolved)
+                        continue
+                    }
+                    guard let endpoint, let obj = sseObject(event.data) else { continue }
+                    if !partial.ok, matches(obj, id: 1) {
+                        guard applyInitialize(obj, to: &partial) else { return partial }
+                        await progress.set(partial)
+                        try? await post(initializedNotification, to: endpoint)
+                        try await post(toolsListMessage, to: endpoint)
+                    } else if matches(obj, id: 2) {
+                        partial.toolCount = toolCount(from: obj)
+                        return partial
+                    }
+                }
+            } catch let failure as ProbeFailure {
+                partial.error = failure.description
+                return partial
+            } catch {
+                if partial.ok { return partial }   // the stream ended after the handshake
+                partial.error = (error as NSError).localizedDescription
+                return partial
+            }
+            if !partial.ok, partial.error == nil {
+                partial.error = endpoint == nil ? "the server never named a message endpoint"
+                                                : "no initialize response"
+            }
+            return partial
+        }
+
+        let outcome: ProbeResult? = await withTaskGroup(of: ProbeResult?.self) { group in
+            group.addTask { await flow.value }
+            group.addTask { try? await Task.sleep(for: timeout); return nil }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            flow.cancel()
+            return first
+        }
+        if let outcome { result = outcome; return result }
+        if let partial = await progress.result { result = partial; return result }
         result.error = "timed out"
         return result
     }

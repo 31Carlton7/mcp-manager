@@ -280,7 +280,8 @@ public struct Handlers: Sendable {
                 throw HandlerError.invalid("a remote server needs a url")
             }
             guard s.usesGateway else {
-                return await MCPProbe.remote(url: url, headers: s.headers, timeout: probeTimeout)
+                return await MCPProbe.remote(url: url, headers: s.headers, transport: s.transport,
+                                             timeout: probeTimeout)
             }
             guard let port = gatewayPort else {
                 return ProbeResult(ok: false, error: "gateway not running", durationMs: 0)
