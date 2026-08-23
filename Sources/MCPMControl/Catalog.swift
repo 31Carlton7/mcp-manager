@@ -31,6 +31,8 @@ public struct CatalogEntry: Codable, Equatable, Sendable, Identifiable {
     /// Whether the endpoint has actually been checked. A curated entry with `false` is a good
     /// guess at a URL that moves around, and the daemon's inspection is what settles it.
     public var verified: Bool
+    /// Anything a person should know before adding this one — "archived upstream", most often.
+    public var note: String?
     public var version: String?
 
     public var id: String { slug }
@@ -39,7 +41,8 @@ public struct CatalogEntry: Codable, Equatable, Sendable, Identifiable {
                 url: String? = nil, transport: Transport? = nil, command: String? = nil,
                 args: [String] = [], env: [String: String] = [:], auth: AuthKind = .none,
                 homepage: String? = nil, iconDomain: String? = nil, source: Source = .bundled,
-                official: Bool = true, verified: Bool = true, version: String? = nil) {
+                official: Bool = true, verified: Bool = true, note: String? = nil,
+                version: String? = nil) {
         self.slug = slug
         self.name = name
         self.description = description
@@ -55,6 +58,7 @@ public struct CatalogEntry: Codable, Equatable, Sendable, Identifiable {
         self.source = source
         self.official = official
         self.verified = verified
+        self.note = note
         self.version = version
     }
 
@@ -77,12 +81,22 @@ public struct CatalogEntry: Codable, Equatable, Sendable, Identifiable {
                   source: try c.decodeIfPresent(Source.self, forKey: .source) ?? .bundled,
                   official: try c.decodeIfPresent(Bool.self, forKey: .official) ?? true,
                   verified: try c.decodeIfPresent(Bool.self, forKey: .verified) ?? true,
+                  note: try c.decodeIfPresent(String.self, forKey: .note),
                   version: try c.decodeIfPresent(String.self, forKey: .version))
     }
 }
 
 public struct CatalogSearchParams: Codable, Equatable, Sendable {
+    /// How many results a search may ask for. A caller asking for a million is asking the daemon
+    /// to hold a million.
+    public static let limits = 1...100
+
     public var query: String
     public var limit: Int?
     public init(query: String, limit: Int? = nil) { self.query = query; self.limit = limit }
+
+    /// The requested limit, clamped into range.
+    public var clampedLimit: Int {
+        min(max(limit ?? 30, Self.limits.lowerBound), Self.limits.upperBound)
+    }
 }

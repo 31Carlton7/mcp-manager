@@ -218,12 +218,14 @@ enum CatalogNormalizer {
     }
 
     /// Vendor entries above wrappers, and alphabetical within each — the registry's own order is
-    /// publication order, which puts whoever submitted last on top.
+    /// publication order, which puts whoever submitted last on top. The slug breaks a tie between
+    /// two entries that display the same name, so the order is total and the same every time.
     static func ranked(_ entries: [CatalogEntry]) -> [CatalogEntry] {
-        entries.enumerated().sorted { a, b in
-            if a.element.official != b.element.official { return a.element.official }
-            return a.offset < b.offset
-        }.map(\.element)
+        entries.sorted { a, b in
+            if a.official != b.official { return a.official }
+            let (x, y) = (a.name.lowercased(), b.name.lowercased())
+            return x == y ? a.slug < b.slug : x < y
+        }
     }
 
     static func normalizedURL(_ raw: String?) -> String? {
@@ -308,6 +310,10 @@ public actor CatalogService {
     /// An empty query is the curated list; anything else is the curated matches followed by
     /// whatever the registry knows that they do not already cover.
     public func search(query: String, limit: Int = 30) async -> [CatalogEntry] {
+        // `prefix` traps on a negative length, and a caller is not the one who decides how much of
+        // this daemon's memory a search gets to use.
+        let limit = min(max(limit, CatalogSearchParams.limits.lowerBound),
+                        CatalogSearchParams.limits.upperBound)
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let curated = CatalogNormalizer.matching(bundled, query: trimmed)
         guard !trimmed.isEmpty else { return Array(curated.prefix(limit)) }
@@ -362,10 +368,11 @@ public actor CatalogService {
     }
 
     /// Best effort. A catalog that cannot write its cache is a catalog that asks again next time,
-    /// which is not worth failing a search over.
+    /// which is not worth failing a search over. Written 0600 like everything else under
+    /// `~/.mcpm`: what someone searched for is theirs.
     private func save(_ next: Cache) {
         cache = next
         guard let data = try? JSONEncoder.mcpm.encode(next) else { return }
-        try? data.write(to: cacheURL, options: .atomic)
+        try? AtomicFile.write(data, to: cacheURL, mode: 0o600)
     }
 }

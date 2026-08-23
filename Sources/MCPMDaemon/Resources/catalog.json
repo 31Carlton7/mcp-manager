@@ -155,6 +155,7 @@
       "env": { "SLACK_BOT_TOKEN": "", "SLACK_TEAM_ID": "" },
       "auth": "none",
       "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/slack",
+      "note": "archived upstream",
       "iconDomain": "slack.com",
       "verified": false
     },
@@ -216,6 +217,7 @@
       "args": ["-y", "@modelcontextprotocol/server-puppeteer"],
       "auth": "none",
       "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/puppeteer",
+      "note": "archived upstream",
       "iconDomain": "pptr.dev",
       "verified": false
     },
@@ -284,6 +286,7 @@
       "args": ["-y", "@modelcontextprotocol/server-postgres"],
       "auth": "none",
       "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/postgres",
+      "note": "archived upstream",
       "iconDomain": "postgresql.org",
       "verified": false
     },

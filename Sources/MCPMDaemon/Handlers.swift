@@ -201,12 +201,9 @@ public struct Handlers: Sendable {
             return .syncPreview(preview(plan, against: snapshots))
         case .catalogSearch(let p):
             guard let catalog else { throw HandlerError.invalid("the catalog is not available") }
-            return .catalog(await catalog.search(query: p.query, limit: p.limit ?? 30))
+            return .catalog(await catalog.search(query: p.query, limit: p.clampedLimit))
         case .inspectURL(let p):
-            guard let url = URL(string: p.url), url.host != nil else {
-                throw HandlerError.invalid("\"\(p.url)\" is not a URL")
-            }
-            return .inspection(convert(await inspect(url, probeTimeout)))
+            return .inspection(convert(await inspect(try webURL(p.url), probeTimeout)))
         case .confirmImport:
             // Recorded first: read-only mode is derived from this, and a daemon that lifted the
             // block without persisting the answer would ask again on the next start, after it had
@@ -318,9 +315,10 @@ public struct Handlers: Sendable {
     /// An unreachable URL is added as it stands: a laptop off the network, a server behind a VPN
     /// and a typo are indistinguishable from here, and only one of them is the user's mistake.
     private func detect(_ p: AddServerParams) async throws -> (auth: AuthKind, transport: Transport?) {
-        guard p.kind == .remote, p.autoDetectAuth, let raw = p.url, let url = URL(string: raw) else {
+        guard p.kind == .remote, p.autoDetectAuth, let raw = p.url else {
             return (p.auth, p.transport)
         }
+        let url = try webURL(raw)
         let inspection = await inspect(url, probeTimeout)
         switch inspection.verdict {
         case .notMCP:
@@ -334,6 +332,16 @@ public struct Handlers: Sendable {
             let auth = p.auth != .none ? p.auth : (inspection.authRequired ? inspection.authKind : .none)
             return (auth, inspection.transport ?? p.transport)
         }
+    }
+
+    /// The only URLs there is anything to inspect at. A `file:` or `ws:` URL would otherwise be
+    /// handed to `URLSession` to make of what it likes.
+    private func webURL(_ raw: String) throws -> URL {
+        guard let url = URL(string: raw), let scheme = url.scheme?.lowercased(),
+              scheme == "https" || scheme == "http", url.host?.isEmpty == false else {
+            throw HandlerError.invalid("\"\(raw)\" is not an http(s) URL")
+        }
+        return url
     }
 
     private func convert(_ i: MCPMGateway.URLInspection) -> MCPMControl.URLInspection {

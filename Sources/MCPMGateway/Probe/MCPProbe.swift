@@ -117,6 +117,9 @@ private final class StderrTail: @unchecked Sendable {
 /// `tools/list`. Never throws; every failure is folded into `ProbeResult.error`.
 public enum MCPProbe {
     static let protocolVersion = "2025-06-18"
+    /// The most of a response body worth holding on to. An `initialize` answer is a few hundred
+    /// bytes; anything past this is not one.
+    static let maxBodyBytes = 1024 * 1024
     static var clientInfo: [String: Any] { ["name": "MCP Manager", "version": MCPMVersion.current] }
 
     // MARK: - JSON-RPC helpers
@@ -241,10 +244,17 @@ public enum MCPProbe {
             }
             return (http, nil)
         }
-        // Plain JSON: buffer the whole body. Rejoining the lines is lossless, since a newline
-        // inside a JSON string has to be escaped.
+        // Plain JSON: buffer the body, up to a point. Rejoining the lines is lossless, since a
+        // newline inside a JSON string has to be escaped. A body past the cap is not an MCP
+        // answer — it is a docs page or something trying to make us hold it in memory.
         var text = ""
-        for try await line in bytes.lines { text += line; text += "\n" }
+        var size = 0
+        for try await line in bytes.lines {
+            size += line.utf8.count + 1
+            guard size <= maxBodyBytes else { return (http, nil) }
+            text += line
+            text += "\n"
+        }
         return (http, responseObject(id: id, in: Data(text.utf8), contentType: contentType))
     }
 
@@ -378,19 +388,25 @@ public enum MCPProbe {
             let task = Task {
                 var name: String?
                 var data: [String] = []
+                var size = 0
+                func reset() { name = nil; data.removeAll(); size = 0 }
                 do {
                     for try await line in lines {
                         if line.hasPrefix("event:") {
+                            reset()
                             name = String(line.dropFirst(6)).trimmingCharacters(in: .whitespaces)
-                            data.removeAll()
                             continue
                         }
                         guard line.hasPrefix("data:") else { continue }
-                        data.append(String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces))
+                        let payload = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+                        data.append(payload)
+                        size += payload.utf8.count
+                        // An event whose `data:` lines never parse would otherwise grow without
+                        // bound; past the cap it is not a JSON-RPC answer and never will be.
+                        if size > maxBodyBytes { reset(); continue }
                         if name == "endpoint" || sseObject(data) != nil {
                             continuation.yield(SSEEvent(name: name, data: data))
-                            name = nil
-                            data.removeAll()
+                            reset()
                         }
                     }
                     continuation.finish()

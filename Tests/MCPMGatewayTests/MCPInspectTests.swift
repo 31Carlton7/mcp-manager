@@ -261,3 +261,99 @@ private func withServer(_ configure: (Router<BasicRequestContext>) -> Void,
         #expect(result.error?.contains("evil.example") == true)
     }
 }
+
+// MARK: - Walls that are not endpoints
+
+/// A login wall, a paywall, a WAF: they all answer a POST with a refusal, and none of them is an
+/// MCP server. Without a challenge that says how to authenticate, a refusal proves nothing.
+private func walledRoute(_ router: Router<BasicRequestContext>, path: String,
+                         status: HTTPResponse.Status, contentType: String,
+                         challenge: String? = nil) {
+    router.post(RouterPath(path)) { _, _ in
+        var headers = HTTPFields()
+        headers[.contentType] = contentType
+        if let challenge { headers[HTTPField.Name("WWW-Authenticate")!] = challenge }
+        return Response(status: status, headers: headers,
+                        body: .init(byteBuffer: ByteBuffer(string: "<html>sign in</html>")))
+    }
+}
+
+@Test(arguments: [HTTPResponse.Status.forbidden, .unauthorized])
+func aRefusalFromAWebPageIsNotAnEndpoint(status: HTTPResponse.Status) async throws {
+    try await withServer({ walledRoute($0, path: "/app", status: status,
+                                       contentType: "text/html; charset=utf-8") }) { base in
+        let result = await MCPProbe.inspect(url: base.appendingPathComponent("app"))
+
+        #expect(result.verdict == .notMCP)
+        #expect(!result.authRequired)
+        #expect(result.authKind == AuthKind.none)
+        #expect(result.suggestion == nil)
+    }
+}
+
+/// No challenge, but a JSON body: that is an MCP server that simply did not say how to sign in,
+/// and the credential it wants is a header someone pastes.
+@Test func aJSONRefusalWithNoChallengeIsStillAnEndpoint() async throws {
+    try await withServer({ walledRoute($0, path: "/mcp", status: .unauthorized,
+                                       contentType: "application/json") }) { base in
+        let result = await MCPProbe.inspect(url: base.appendingPathComponent("mcp"))
+
+        #expect(result.verdict == .mcpEndpoint)
+        #expect(result.authRequired)
+        #expect(result.authKind == .header)
+    }
+}
+
+/// The wall is at the pasted URL; the endpoint is next door. Refusing to call the wall an endpoint
+/// is what lets the suggestion be found at all.
+@Test func aWalledPageStillGetsTheSiblingEndpointSuggested() async throws {
+    try await withServer({ router in
+        walledRoute(router, path: "/dashboard", status: .forbidden, contentType: "text/html")
+        mcpRoute(router)
+    }) { base in
+        let result = await MCPProbe.inspect(url: base.appendingPathComponent("dashboard"))
+
+        #expect(result.verdict == .notMCP)
+        #expect(result.suggestion == base.appendingPathComponent("mcp"))
+    }
+}
+
+/// Plaintext metadata is metadata anyone on the path can write, and whether a server uses OAuth at
+/// all is not a question to answer from that.
+@Test func aPlaintextResourceMetadataURLIsNotFollowed() async throws {
+    let challenge = #"Bearer resource_metadata="http://metadata.example.com/prm""#
+    try await withServer({ walledRoute($0, path: "/mcp", status: .unauthorized,
+                                       contentType: "application/json", challenge: challenge) }) { base in
+        let result = await MCPProbe.inspect(url: base.appendingPathComponent("mcp"))
+
+        #expect(result.verdict == .mcpEndpoint)
+        #expect(result.authRequired)
+        #expect(result.authKind == .header)
+        #expect(result.resourceMetadataURL == nil)
+    }
+}
+
+// MARK: - Reading a challenge
+
+@Test(arguments: [
+    (#"Bearer resource_metadata="https://x.dev/.well-known/oauth-protected-resource""#,
+     "https://x.dev/.well-known/oauth-protected-resource"),
+    (#"Bearer resource_metadata=https://x.dev/prm, error="invalid_token""#, "https://x.dev/prm"),
+    (#"Bearer realm="mcp", error="invalid_token", resource_metadata="https://x.dev/prm""#,
+     "https://x.dev/prm"),
+    (#"Basic realm="x", Bearer resource_metadata="https://x.dev/prm""#, "https://x.dev/prm"),
+    (#"Bearer RESOURCE_METADATA="https://x.dev/prm""#, "https://x.dev/prm"),
+])
+func aChallengeIsReadForTheMetadataItNames(header: String, expected: String) {
+    #expect(MCPProbe.resourceMetadataURL(in: header) == expected)
+}
+
+@Test(arguments: [#"Bearer realm="mcp""#, "Basic", "", #"Bearer resource_metadata=""#])
+func aChallengeWithNoUsableMetadataNamesNothing(header: String) {
+    let found = MCPProbe.resourceMetadataURL(in: header)
+    #expect(found == nil || found?.isEmpty == true)
+}
+
+@Test func noChallengeAtAllNamesNothing() {
+    #expect(MCPProbe.resourceMetadataURL(in: nil) == nil)
+}

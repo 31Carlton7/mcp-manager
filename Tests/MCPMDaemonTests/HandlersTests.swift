@@ -719,3 +719,22 @@ private func inspection(_ verdict: GatewayInspection.Verdict, transport: Transpo
         try await e.handlers.handle(ControlRequest(id: 1, command: .catalogSearch(.init(query: "x"))))
     }
 }
+
+/// `URLSession` will happily be handed a `file:` URL, and an inspection is not a reason to read
+/// one. Nothing but http(s) has an MCP endpoint behind it.
+@Test(arguments: ["file:///etc/passwd", "ws://mcp.acme.dev/mcp", "mcp.acme.dev/mcp", "https://",
+                  "javascript:alert(1)"])
+func onlyHTTPURLsAreInspected(raw: String) async throws {
+    let e = try await makeEnv()
+    await #expect(throws: HandlerError.self) {
+        try await e.handlers.handle(ControlRequest(id: 1, command: .inspectURL(.init(url: raw))))
+    }
+    #expect(e.inspector.askedURLs.isEmpty)
+
+    let params = AddServerParams(name: "Odd", kind: .remote, url: raw)
+    await #expect(throws: HandlerError.self) {
+        try await e.handlers.handle(ControlRequest(id: 2, command: .addServer(params)))
+    }
+    #expect(await e.coord.currentLibrary().servers.isEmpty)
+    #expect(e.inspector.askedURLs.isEmpty)
+}

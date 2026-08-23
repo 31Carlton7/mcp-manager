@@ -75,6 +75,10 @@ extension MCPProbe {
         var detail: String = ""
     }
 
+    /// How much of an event stream to read before deciding it is not naming an endpoint.
+    static let maxInspectedEvents = 16
+    static let maxInspectedStreamBytes = 64 * 1024
+
     static func inspectSession(timeout: Duration) -> URLSession {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = seconds(timeout)
@@ -126,6 +130,13 @@ extension MCPProbe {
             reply.authRequired = true
             reply.wwwAuthenticate = http.value(forHTTPHeaderField: "WWW-Authenticate")
             reply.detail = "MCP endpoint, needs sign-in"
+            // Any gated page answers 401 to a POST — a paywall, a login wall, a WAF. Only a
+            // challenge that says how to authenticate, or a body in a shape an MCP server sends,
+            // makes this an endpoint rather than a wall to look behind.
+            guard verifies(reply) || speaksMCP(contentType) else {
+                return .notEndpoint(status: http.statusCode, contentType: contentType, location: nil,
+                                    detail: "refused the request without an MCP challenge")
+            }
             return .endpoint(.http, reply)
         case 300...399:
             let location = http.value(forHTTPHeaderField: "Location")
@@ -173,9 +184,21 @@ extension MCPProbe {
                                 detail: "answered HTTP \(http.statusCode)")
         }
         do {
-            for try await event in sseEvents(bytes.lines) where event.name == "endpoint" {
-                reply.detail = "MCP endpoint (legacy SSE transport)"
-                return .endpoint(.sse, reply)
+            // The `endpoint` event comes first in any server that sends one. Reading on past a
+            // handful of events, or past a handful of kilobytes, is reading someone else's stream.
+            var events = 0
+            var read = 0
+            for try await event in sseEvents(bytes.lines) {
+                if event.name == "endpoint" {
+                    reply.detail = "MCP endpoint (legacy SSE transport)"
+                    return .endpoint(.sse, reply)
+                }
+                events += 1
+                read += event.data.reduce(0) { $0 + $1.utf8.count }
+                guard events < Self.maxInspectedEvents, read < Self.maxInspectedStreamBytes else {
+                    return .notEndpoint(status: http.statusCode, contentType: contentType, location: nil,
+                                        detail: "the stream named no message endpoint")
+                }
             }
         } catch {
             return .notEndpoint(status: http.statusCode, contentType: contentType, location: nil,
@@ -203,10 +226,14 @@ extension MCPProbe {
 
     /// OAuth when the resource names an authorization server we could actually talk to; a pasted
     /// header otherwise, which is the only credential left when there is no flow to run.
-    static func resolveAuthKind(_ session: URLSession, url: URL,
+    static func resolveAuthKind(_ http: any HTTPClient, url: URL,
                                 challenge: String?) async -> (AuthKind, String?) {
         var candidates: [URL] = []
-        if let named = resourceMetadataURL(in: challenge), let parsed = URL(string: named) {
+        // The challenge names the document, and a server that names a plaintext one is naming
+        // somewhere a network can rewrite: whether this resource uses OAuth at all would then be
+        // whatever the wire said it was.
+        if let named = resourceMetadataURL(in: challenge), let parsed = URL(string: named),
+           (parsed.scheme ?? "").lowercased() == "https" || isLoopback(parsed) {
             candidates.append(parsed)
         }
         for candidate in discoveryCandidates(resource: url) where !candidates.contains(candidate) {
@@ -215,8 +242,9 @@ extension MCPProbe {
         for candidate in candidates {
             var request = URLRequest(url: candidate)
             request.setValue("application/json", forHTTPHeaderField: "Accept")
-            guard let (data, response) = try? await session.data(for: request),
-                  let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode),
+            // Through the OAuth client's session: a size cap, and no redirect chasing.
+            guard let (data, response) = try? await http.send(request),
+                  (200...299).contains(response.statusCode),
                   let prm = try? JSONDecoder().decode(ProtectedResourceMetadata.self, from: data),
                   resourceMatches(prm.resource, requested: url),
                   !prm.authorizationServers.isEmpty else { continue }
@@ -253,6 +281,12 @@ extension MCPProbe {
             }
         }
         return out
+    }
+
+    /// The content types an MCP server answers in. Anything else is a web page.
+    static func speaksMCP(_ contentType: String?) -> Bool {
+        let type = (contentType ?? "").lowercased()
+        return type.contains("json") || type.contains("text/event-stream")
     }
 
     /// A candidate counts only if it behaves like an endpoint: a handshake, or a refusal that says
@@ -297,17 +331,20 @@ extension MCPProbe {
     static func inspectImpl(url: URL, timeout: Duration) async -> URLInspection {
         let session = inspectSession(timeout: timeout)
         defer { session.invalidateAndCancel() }
+        let metadata = URLSessionHTTPClient(timeout: seconds(timeout))
 
         switch await checkHTTP(session, url) {
         case let .endpoint(transport, reply):
-            return await endpointFound(session, url: url, transport: transport, reply: reply)
+            return await endpointFound(session, metadata: metadata, url: url,
+                                       transport: transport, reply: reply)
         case let .unreachable(why):
             return URLInspection(verdict: .unreachable, detail: why)
         case let .notEndpoint(status, contentType, location, detail):
             // The same URL over the older transport, before writing it off: a `/sse` server
             // refuses the POST that a Streamable-HTTP one answers.
             if case let .endpoint(transport, reply) = await checkSSE(session, url) {
-                return await endpointFound(session, url: url, transport: transport, reply: reply)
+                return await endpointFound(session, metadata: metadata, url: url,
+                                           transport: transport, reply: reply)
             }
             // A third of the deadline per candidate, so a slow neighbour cannot eat the whole
             // inspection and leave the answer we already have unreported.
@@ -320,17 +357,18 @@ extension MCPProbe {
 
     /// Fills in what is only worth asking for once a URL has turned out to be an endpoint: which
     /// credential it wants, and how many tools it has.
-    static func endpointFound(_ session: URLSession, url: URL, transport: Transport,
-                              reply: Reply) async -> URLInspection {
+    static func endpointFound(_ session: URLSession, metadata: any HTTPClient, url: URL,
+                              transport: Transport, reply: Reply) async -> URLInspection {
         var inspection = URLInspection(verdict: .mcpEndpoint, transport: transport,
                                        authRequired: reply.authRequired,
                                        serverName: reply.serverName, serverVersion: reply.serverVersion,
                                        statusCode: reply.status, contentType: reply.contentType,
                                        detail: reply.detail)
         if reply.authRequired {
-            let (kind, metadata) = await resolveAuthKind(session, url: url, challenge: reply.wwwAuthenticate)
+            let (kind, document) = await resolveAuthKind(metadata, url: url,
+                                                         challenge: reply.wwwAuthenticate)
             inspection.authKind = kind
-            inspection.resourceMetadataURL = metadata
+            inspection.resourceMetadataURL = document
         } else if transport == .http, reply.serverName != nil {
             inspection.toolCount = await toolCount(session, url: url, sessionID: reply.sessionID)
         }

@@ -236,3 +236,63 @@ private final class Clock: @unchecked Sendable {
     var now: Date { lock.withLock { date } }
     func advance(by seconds: TimeInterval) { lock.withLock { date += seconds } }
 }
+
+// MARK: - Limits, order and the file on disk
+
+@Test(arguments: [(0, 1), (-5, 1), (1000, 100), (7, 7)])
+func theResultLimitIsClamped(asked: Int, expected: Int) async {
+    let many = (0..<200).map {
+        CatalogEntry(slug: "s\($0)", name: "S\($0)", description: "one of many", kind: .stdio,
+                     command: "npx")
+    }
+    let service = CatalogService(bundled: many, http: StubRegistry(json: nil), cacheURL: tmpCache())
+    #expect(await service.search(query: "many", limit: asked).count == expected)
+}
+
+@Test func theWireLimitIsClampedBeforeItReachesTheService() {
+    #expect(CatalogSearchParams(query: "x").clampedLimit == 30)
+    #expect(CatalogSearchParams(query: "x", limit: 0).clampedLimit == 1)
+    #expect(CatalogSearchParams(query: "x", limit: -1).clampedLimit == 1)
+    #expect(CatalogSearchParams(query: "x", limit: 5000).clampedLimit == 100)
+    #expect(CatalogSearchParams(query: "x", limit: 12).clampedLimit == 12)
+}
+
+/// Publication order is not an order anyone asked for: within a tier the list is alphabetical, so
+/// the same search twice looks the same twice.
+@Test func registryResultsAreAlphabeticalWithinTheirTier() {
+    let entries = [
+        CatalogEntry(slug: "z", name: "zebra", kind: .remote, url: "https://z.dev", source: .registry,
+                     official: false),
+        CatalogEntry(slug: "b", name: "Beta", kind: .remote, url: "https://b.dev", source: .registry,
+                     official: true),
+        CatalogEntry(slug: "a", name: "alpha", kind: .remote, url: "https://a.dev", source: .registry,
+                     official: false),
+        CatalogEntry(slug: "c", name: "Ceta", kind: .remote, url: "https://c.dev", source: .registry,
+                     official: true),
+    ]
+    #expect(CatalogNormalizer.ranked(entries).map(\.slug) == ["b", "c", "a", "z"])
+}
+
+/// What someone searched for is theirs, and everything else under `~/.mcpm` is 0600.
+@Test func theCacheFileIsOwnerOnly() async throws {
+    let cache = tmpCache()
+    let service = CatalogService(bundled: [], http: StubRegistry(json: registryJSON), cacheURL: cache)
+    _ = await service.search(query: "notion")
+
+    let mode = try #require(try FileManager.default.attributesOfItem(atPath: cache.path)[.posixPermissions] as? NSNumber)
+    #expect(mode.int16Value == 0o600)
+}
+
+/// A package whose upstream has been archived still works, and someone about to adopt it should
+/// be told before rather than after.
+@Test func archivedPackagesCarryTheirNote() throws {
+    for slug in ["slack", "puppeteer", "postgres"] {
+        let entry = try #require(BundledCatalog.entries.first { $0.slug == slug })
+        #expect(entry.note == "archived upstream")
+        #expect(!entry.verified)
+    }
+    // And the note survives the wire, since it is the app that has to show it.
+    let entry = try #require(BundledCatalog.entries.first { $0.slug == "slack" })
+    let round = try JSONDecoder.mcpm.decode(CatalogEntry.self, from: JSONEncoder.mcpm.encode(entry))
+    #expect(round == entry)
+}
