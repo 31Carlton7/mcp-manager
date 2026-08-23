@@ -97,6 +97,16 @@ public struct UpdateServerParams: Codable, Equatable, Sendable {
     }
 }
 
+/// A partial update: a nil field is one the caller isn't changing. Both are validated by the
+/// daemon, which is the only side that knows what the running gateway is already bound to.
+public struct SetSettingsParams: Codable, Equatable, Sendable {
+    public var gatewayPort: Int?
+    public var backupRetention: Int?
+    public init(gatewayPort: Int? = nil, backupRetention: Int? = nil) {
+        self.gatewayPort = gatewayPort; self.backupRetention = backupRetention
+    }
+}
+
 public struct SetHeaderParams: Codable, Equatable, Sendable {
     public var id: String
     public var name: String
@@ -123,6 +133,8 @@ public enum ControlCommand: Equatable, Sendable {
     case authSignOut(IDParams)
     case authForget(IDParams)
     case authSetHeader(SetHeaderParams)
+    case getSettings
+    case setSettings(SetSettingsParams)
 
     public var method: String {
         switch self {
@@ -142,6 +154,8 @@ public enum ControlCommand: Equatable, Sendable {
         case .authSignOut: "auth.signOut"
         case .authForget: "auth.forget"
         case .authSetHeader: "auth.setHeader"
+        case .getSettings: "settings.get"
+        case .setSettings: "settings.set"
         }
     }
 }
@@ -174,6 +188,8 @@ public struct ControlRequest: Codable, Equatable, Sendable {
         case "auth.signOut": command = .authSignOut(try c.decode(IDParams.self, forKey: .params))
         case "auth.forget": command = .authForget(try c.decode(IDParams.self, forKey: .params))
         case "auth.setHeader": command = .authSetHeader(try c.decode(SetHeaderParams.self, forKey: .params))
+        case "settings.get": command = .getSettings
+        case "settings.set": command = .setSettings(try c.decode(SetSettingsParams.self, forKey: .params))
         default:
             throw DecodingError.dataCorruptedError(forKey: .method, in: c, debugDescription: "unknown method \(method)")
         }
@@ -194,7 +210,8 @@ public struct ControlRequest: Codable, Equatable, Sendable {
         case .reimport(let p): try c.encode(p, forKey: .params)
         case .authStart(let p), .authSignOut(let p), .authForget(let p): try c.encode(p, forKey: .params)
         case .authSetHeader(let p): try c.encode(p, forKey: .params)
-        case .status, .subscribe, .listServers, .listClients: break
+        case .setSettings(let p): try c.encode(p, forKey: .params)
+        case .status, .subscribe, .listServers, .listClients, .getSettings: break
         }
     }
 }
@@ -238,11 +255,29 @@ public struct DaemonStatus: Codable, Equatable, Sendable {
     /// The port the auth gateway is listening on, or nil when it failed to start — in which case
     /// authenticated servers cannot be reached and `lastError` says why.
     public var gatewayPort: Int?
+    /// A saved setting the running daemon has not picked up — today only the gateway port, which
+    /// cannot be rebound live without stranding every client config that points at the old one.
+    public var settingsPendingRestart: Bool
+
     public init(daemonVersion: String, apiVersion: Int, servers: [ServerStatus], clients: [ClientStatus],
-                lastError: String? = nil, gatewayPort: Int? = nil) {
+                lastError: String? = nil, gatewayPort: Int? = nil, settingsPendingRestart: Bool = false) {
         self.daemonVersion = daemonVersion; self.apiVersion = apiVersion
         self.servers = servers; self.clients = clients; self.lastError = lastError
-        self.gatewayPort = gatewayPort
+        self.gatewayPort = gatewayPort; self.settingsPendingRestart = settingsPendingRestart
+    }
+
+    /// `settingsPendingRestart` arrived after the first release. It is not optional in the model —
+    /// "unknown" and "no" mean the same thing to the UI — so it is decoded with a default rather
+    /// than making a status from an older daemon fail to parse outright.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        daemonVersion = try c.decode(String.self, forKey: .daemonVersion)
+        apiVersion = try c.decode(Int.self, forKey: .apiVersion)
+        servers = try c.decode([ServerStatus].self, forKey: .servers)
+        clients = try c.decode([ClientStatus].self, forKey: .clients)
+        lastError = try c.decodeIfPresent(String.self, forKey: .lastError)
+        gatewayPort = try c.decodeIfPresent(Int.self, forKey: .gatewayPort)
+        settingsPendingRestart = try c.decodeIfPresent(Bool.self, forKey: .settingsPendingRestart) ?? false
     }
 }
 
@@ -279,6 +314,7 @@ public enum ControlResult: Codable, Equatable, Sendable {
     /// app does, so the browser belongs to the logged-in GUI session.
     case authorizeURL(String)
     case testResult(TestResult)
+    case settings(Settings)
 }
 
 public struct ControlResponse: Codable, Equatable, Sendable {

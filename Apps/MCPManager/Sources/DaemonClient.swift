@@ -24,6 +24,13 @@ final class DaemonClient {
     private(set) var testResults: [String: TestResult] = [:]
     /// Servers with a test in flight — the button's spinner, and the guard against a second one.
     private(set) var testing: Set<String> = []
+    /// The daemon's saved settings, fetched on demand. Deliberately not part of the pushed status:
+    /// that arrives on every sync, and these change only when someone changes them.
+    private(set) var settings: Settings?
+    /// Why the last `settings.set` was refused, so the field can say so instead of silently
+    /// snapping back. Cleared when the next one is attempted.
+    private(set) var settingsError: String?
+    private(set) var savingSettings = false
 
     var isConnected: Bool { if case .connected = connection { true } else { false } }
     var disconnectReason: String? { if case .disconnected(let why) = connection { why } else { nil } }
@@ -32,6 +39,10 @@ final class DaemonClient {
     /// nothing that needs a credential can be reached and the UI says so instead of offering a
     /// sign-in that would fail.
     var gatewayPort: Int? { status?.gatewayPort }
+
+    /// A saved setting the running daemon hasn't picked up — the gateway port, which only moves on
+    /// a restart because every client config already points at the port it is bound to.
+    var settingsPendingRestart: Bool { status?.settingsPendingRestart ?? false }
 
     var health: Health {
         guard isConnected, let s = status else { return .error }
@@ -252,6 +263,42 @@ final class DaemonClient {
         } catch {
             testResults[id] = TestResult(ok: false, error: String(describing: error), durationMs: 0)
         }
+    }
+
+    // MARK: settings
+
+    /// Idempotent, and safe to call from `onAppear`: a failure leaves `settings` nil, which the
+    /// view reads as "not loaded yet" and shows a disabled field for.
+    func loadSettings() async {
+        guard case .settings(let s)? = try? await send(.getSettings) else { return }
+        settings = s
+    }
+
+    /// Saves the fields it is given and leaves the rest alone. Returns false when the daemon
+    /// refused, with `settingsError` carrying its reason.
+    @discardableResult
+    func saveSettings(gatewayPort: Int? = nil, backupRetention: Int? = nil) async -> Bool {
+        settingsError = nil
+        savingSettings = true
+        defer { savingSettings = false }
+        do {
+            let cmd = ControlCommand.setSettings(.init(gatewayPort: gatewayPort, backupRetention: backupRetention))
+            if case .settings(let s) = try await send(cmd) { settings = s }
+            // A settings change moves no file, so nothing on the daemon's side would push a new
+            // status — and `settingsPendingRestart` lives on the status. Ask for one.
+            if case .status(let s) = try await send(.status) { apply(s) }
+            return true
+        } catch {
+            settingsError = reason(error)
+            return false
+        }
+    }
+
+    /// The daemon's own words for a refusal; anything else is a transport failure and gets the
+    /// generic description, since there is no sentence in it worth showing on its own.
+    private func reason(_ error: Error) -> String {
+        if case ControlClientError.remote(let why) = error { return why }
+        return String(describing: error)
     }
 
     private func run(_ cmd: ControlCommand, keys: [(server: String, client: ClientID)] = []) {

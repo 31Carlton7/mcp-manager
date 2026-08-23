@@ -143,3 +143,34 @@ func authAndTestCommandsRoundTrip(command: ControlCommand) throws {
     let round = try JSONDecoder.mcpm.decode(AddServerParams.self, from: JSONEncoder.mcpm.encode(withHeaders))
     #expect(round == withHeaders)
 }
+
+// MARK: - Settings
+
+@Test func settingsCommandsRoundTripOverTheWire() throws {
+    for command in [ControlCommand.getSettings,
+                    .setSettings(.init(gatewayPort: 9001, backupRetention: 3)),
+                    .setSettings(.init(backupRetention: 3))] {
+        let req = ControlRequest(id: 4, command: command)
+        let round = try JSONDecoder.mcpm.decode(ControlRequest.self, from: JSONEncoder.mcpmWire.encode(req))
+        #expect(round == req)
+    }
+    let result = ControlResult.settings(Settings(gatewayPort: 9001, backupRetention: 3))
+    #expect(try JSONDecoder.mcpm.decode(ControlResult.self, from: JSONEncoder.mcpmWire.encode(result)) == result)
+}
+
+@Test func daemonStatusCarriesThePendingRestartFlag() throws {
+    let status = DaemonStatus(daemonVersion: "0.1.0", apiVersion: controlAPIVersion, servers: [], clients: [],
+                              gatewayPort: 7337, settingsPendingRestart: true)
+    let round = try JSONDecoder.mcpm.decode(DaemonStatus.self, from: JSONEncoder.mcpmWire.encode(status))
+    #expect(round == status)
+    #expect(round.settingsPendingRestart)
+}
+
+/// A daemon from before settings existed sends a status without the key; it means "nothing
+/// pending", not "undecodable".
+@Test func daemonStatusDecodesWithoutThePendingRestartFlag() throws {
+    let json = #"{"daemonVersion":"0.1.0","apiVersion":1,"servers":[],"clients":[],"gatewayPort":7337}"#
+    let status = try JSONDecoder.mcpm.decode(DaemonStatus.self, from: Data(json.utf8))
+    #expect(status.settingsPendingRestart == false)
+    #expect(status.gatewayPort == 7337)
+}

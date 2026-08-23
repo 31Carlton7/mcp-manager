@@ -27,14 +27,16 @@ public struct Handlers: Sendable {
     /// Why the gateway is missing. Surfaced through `lastError` so the app has something to show
     /// beyond a server stuck at "needs sign-in".
     let gatewayError: String?
+    let settings: SettingsService
     let probeTimeout: Duration
 
     public init(coord: SyncCoordinator, auth: AuthManager, gatewayPort: Int?, gatewayError: String? = nil,
-                probeTimeout: Duration = .seconds(10)) {
+                settings: SettingsService, probeTimeout: Duration = .seconds(10)) {
         self.coord = coord
         self.auth = auth
         self.gatewayPort = gatewayPort
         self.gatewayError = gatewayError
+        self.settings = settings
         self.probeTimeout = probeTimeout
     }
 
@@ -57,9 +59,14 @@ public struct Handlers: Sendable {
             let state = s.auth == .none ? AuthState.none : await auth.state(for: s.id, auth: s.auth)
             servers.append(ServerStatus(server: s, state: state.rawValue))
         }
+        // A real sync or gateway failure outranks the restart note: that note is a nudge, and the
+        // other two are things that are broken right now.
+        let pending = await settings.pendingRestart
         return DaemonStatus(daemonVersion: daemonVersion, apiVersion: controlAPIVersion,
                             servers: servers, clients: clients,
-                            lastError: snap.lastError ?? gatewayError, gatewayPort: gatewayPort)
+                            lastError: snap.lastError ?? gatewayError
+                                ?? (pending ? SettingsService.restartNote : nil),
+                            gatewayPort: gatewayPort, settingsPendingRestart: pending)
     }
 
     public func handle(_ req: ControlRequest) async throws -> ControlResult {
@@ -163,6 +170,18 @@ public struct Handlers: Sendable {
             try validateHeader(name: p.name, value: p.value)
             try await auth.setHeader(id: s.id, name: p.name, value: p.value)
             return .ack
+        case .getSettings:
+            return .settings(await settings.settings)
+        case .setSettings(let p):
+            // Errors come back as the validation message rather than as a thrown actor error, so
+            // the app can put "8 is not a valid port" in front of the field the user typed into.
+            do {
+                let saved = try await settings.apply(
+                    SettingsPatch(gatewayPort: p.gatewayPort, backupRetention: p.backupRetention))
+                return .settings(saved)
+            } catch let e as SettingsService.ValidationError {
+                throw HandlerError.invalid(e.description)
+            }
         }
     }
 

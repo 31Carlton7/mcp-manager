@@ -35,9 +35,25 @@ enum MCPMD {
         let paths = Paths()
         try paths.ensureRoot()
 
-        let gatewayPort = configuredGatewayPort()
+        // A settings file we can't parse must not keep the daemon off the air; the defaults are
+        // as good a starting point as any, and `settings.set` will rewrite the file when the user
+        // fixes it from the app.
+        let settingsStore = SettingsStore(url: paths.settings)
+        var settings = Settings()
+        do {
+            settings = try settingsStore.load()
+        } catch {
+            log.error("settings.json is unreadable, using defaults: \(String(describing: error), privacy: .public)")
+        }
+
+        let envPort = environmentGatewayPort()
+        let gatewayPort = envPort ?? settings.gatewayPort
         let coord = SyncCoordinator(store: Store(url: paths.library), adapters: AllAdapters.make(),
-                                    backups: BackupStore(root: paths.backups), gatewayPort: gatewayPort)
+                                    backups: BackupStore(root: paths.backups, keep: settings.backupRetention),
+                                    gatewayPort: gatewayPort)
+        let settingsService = SettingsService(store: settingsStore, initial: settings, runningPort: gatewayPort,
+                                              portOverriddenByEnvironment: envPort != nil,
+                                              applyRetention: { keep in await coord.setBackupRetention(keep) })
 
         // If something answers on the socket, another mcpmd is running — bail out instead of
         // stealing it. This comes before the gateway binds, so a second daemon does not report a
@@ -81,7 +97,8 @@ enum MCPMD {
             log.error("\(gatewayError ?? "", privacy: .public)")
         }
 
-        let handlers = Handlers(coord: coord, auth: auth, gatewayPort: boundPort, gatewayError: gatewayError)
+        let handlers = Handlers(coord: coord, auth: auth, gatewayPort: boundPort, gatewayError: gatewayError,
+                                settings: settingsService)
         let server = ControlServer(socketPath: paths.socket.path) { req in try await handlers.handle(req) }
 
         // Bind before syncing anything: a failure to bind then leaves no trace behind, and an app
@@ -119,15 +136,15 @@ enum MCPMD {
         }
     }
 
-    /// `MCPM_GATEWAY_PORT` exists for tests and for a machine where 7337 is spoken for. A value
-    /// that is not a usable TCP port is a typo, and binding 0 would hand out an ephemeral port that
-    /// no client config points at — so it is reported and ignored.
-    private static func configuredGatewayPort() -> Int {
-        let fallback = 7337
-        guard let raw = ProcessInfo.processInfo.environment["MCPM_GATEWAY_PORT"] else { return fallback }
-        guard let port = Int(raw), (1...65535).contains(port) else {
-            log.error("MCPM_GATEWAY_PORT=\(raw, privacy: .public) is not a port; using \(fallback, privacy: .public)")
-            return fallback
+    /// `MCPM_GATEWAY_PORT` exists for tests and for a machine where the configured port is spoken
+    /// for; it outranks `settings.json`. A value that is not a usable TCP port is a typo, and
+    /// binding 0 would hand out an ephemeral port that no client config points at — so an
+    /// unusable value is reported and ignored, falling through to the file.
+    private static func environmentGatewayPort() -> Int? {
+        guard let raw = ProcessInfo.processInfo.environment["MCPM_GATEWAY_PORT"] else { return nil }
+        guard let port = Int(raw), Settings.portRange.contains(port) else {
+            log.error("MCPM_GATEWAY_PORT=\(raw, privacy: .public) is not a port; ignoring it")
+            return nil
         }
         return port
     }

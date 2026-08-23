@@ -24,7 +24,7 @@ public struct ClientHealth: Sendable, Equatable {
 public actor SyncCoordinator {
     public let store: Store
     public let adapters: [any ClientAdapter]
-    public let backups: BackupStore
+    public private(set) var backups: BackupStore
     public var gatewayPort: Int
     private let suppressWindow: TimeInterval = 2
     private var suppressedUntil: [ClientID: Date] = [:]
@@ -70,6 +70,13 @@ public actor SyncCoordinator {
     public func clientHealth() -> [ClientID: ClientHealth] {
         let installed = Set(adapters.filter { $0.isInstalled() }.map(\.id))
         return health.filter { installed.contains($0.key) }
+    }
+
+    /// How many backups of each client config to keep. Settable while the daemon runs: the count
+    /// only decides what `backup` prunes on the next write, so nothing already on disk depends on
+    /// the old value.
+    public func setBackupRetention(_ keep: Int) {
+        backups = BackupStore(root: backups.root, keep: keep)
     }
 
     /// Drop the "we just wrote this file" window for a client, so the next pass reads it back even
