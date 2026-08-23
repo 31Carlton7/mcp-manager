@@ -28,6 +28,28 @@ struct AddServerSheet: View {
     /// The paste well's current height: one line to start, growing with the content up to a point
     /// past which it scrolls instead.
     @State private var pasteHeight: CGFloat = Self.pasteMinHeight
+    /// What the daemon found when it asked the pasted URL what it is. Nil whenever there is no
+    /// remote URL to ask about, and while the answer for a new one is still coming.
+    @State private var inspection: URLInspection?
+    @State private var checking = false
+    /// Why the check itself couldn't run — a malformed URL, or the service being unreachable. Not
+    /// a verdict on the server, so it says so and blocks nothing.
+    @State private var inspectionError: String?
+    /// Once the user picks an auth kind, an inspection stops overwriting it. Reset by a new URL,
+    /// whose reading is about a different server.
+    @State private var authEdited = false
+    /// Set while the add is in flight, so a second Return can't add the same server twice.
+    @State private var adding = false
+    /// The daemon's reason for refusing the add — most often that the URL is not an endpoint.
+    @State private var addError: String?
+    /// A server that was just added needing a sign-in, keeping the sheet open to offer it.
+    @State private var added: AddedServer?
+
+    /// The one thing worth remembering about a server after it exists: how to start its sign-in.
+    private struct AddedServer: Identifiable {
+        let id: String
+        let name: String
+    }
 
     /// Identity that survives editing: keying rows by their key would renumber the list mid-word.
     private struct KeyValueRow: Identifiable {
@@ -43,8 +65,19 @@ struct AddServerSheet: View {
     private var trimmedName: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var trimmedHeaderName: String { headerName.trimmingCharacters(in: .whitespaces) }
 
+    /// The URL the inspection is about, and the key its task is keyed on: a new one is a new
+    /// question, and the answer to the old one is thrown away with it.
+    private var remoteURL: String? {
+        guard let single, single.kind == .remote, let url = single.url, !url.isEmpty else { return nil }
+        return url
+    }
+
+    /// The daemon asked and the URL answered as something other than an MCP endpoint. The daemon
+    /// would refuse the add anyway; saying so here saves the round trip and offers the way out.
+    private var notAnEndpoint: Bool { inspection?.parsedVerdict == .notMCP }
+
     private var canAdd: Bool {
-        guard !parsed.servers.isEmpty else { return false }
+        guard !parsed.servers.isEmpty, !adding, !checking, !notAnEndpoint else { return false }
         return single == nil || !trimmedName.isEmpty
     }
 
@@ -52,40 +85,46 @@ struct AddServerSheet: View {
         VStack(alignment: .leading, spacing: Space.m) {
             Text("Add MCP server").font(.system(size: 15, weight: .semibold))
 
-            pasteField
-            summaryLine
+            // Everything above the buttons goes inert once the add is in flight or done: the
+            // fields describe a server that either exists already or is being created from them.
+            Group {
+                pasteField
+                summaryLine
+                inspectionLine
 
-            Hairline()
+                Hairline()
 
-            if let single {
-                preview(single)
-                LabeledContent("Name") {
-                    // Writing through the binding is the only signal that the *user* renamed the
-                    // server; `onChange` would also fire when a fresh parse fills the field in.
-                    // Emptying the field is a request to go back to the parsed name.
-                    TextField("Server name", text: Binding(
-                        get: { name },
-                        set: {
-                            name = $0
-                            nameEdited = !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        }))
-                        .textFieldStyle(.roundedBorder)
-                        .labelsHidden()
+                if let single {
+                    preview(single)
+                    LabeledContent("Name") {
+                        // Writing through the binding is the only signal that the *user* renamed the
+                        // server; `onChange` would also fire when a fresh parse fills the field in.
+                        // Emptying the field is a request to go back to the parsed name.
+                        TextField("Server name", text: Binding(
+                            get: { name },
+                            set: {
+                                name = $0
+                                nameEdited = !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            }))
+                            .textFieldStyle(.roundedBorder)
+                            .labelsHidden()
+                    }
+                } else if parsed.servers.count > 1 {
+                    Text("\(parsed.servers.count) servers will be added")
+                        .font(Typography.body)
                 }
-            } else if parsed.servers.count > 1 {
-                Text("\(parsed.servers.count) servers will be added")
+
+                LabeledContent("Enable in") { clientChips }
+
+                if single != nil {
+                    DisclosureGroup("Advanced", isExpanded: $advanced) {
+                        advancedFields
+                            .padding(.top, Space.s)
+                    }
                     .font(Typography.body)
-            }
-
-            LabeledContent("Enable in") { clientChips }
-
-            if single != nil {
-                DisclosureGroup("Advanced", isExpanded: $advanced) {
-                    advancedFields
-                        .padding(.top, Space.s)
                 }
-                .font(Typography.body)
             }
+            .disabled(adding || added != nil)
 
             buttons
         }
@@ -99,7 +138,13 @@ struct AddServerSheet: View {
             guard !Task.isCancelled else { return }
             reparse()
         }
+        // Keyed on the URL rather than on the paste: retyping the name around it asks the same
+        // question, and a URL that changes cancels the check that was running for the old one.
+        .task(id: remoteURL) { await inspect() }
         .animation(.snappy(duration: 0.2), value: parsed.servers.count)
+        .animation(.snappy(duration: 0.2), value: checking)
+        .animation(.snappy(duration: 0.2), value: inspection)
+        .animation(.snappy(duration: 0.2), value: added?.id)
     }
 
     // MARK: paste
@@ -161,6 +206,104 @@ struct AddServerSheet: View {
 
     private var failedToParse: Bool {
         parsed.summary.hasPrefix("Couldn't") || parsed.summary.hasPrefix("No servers")
+    }
+
+    // MARK: inspection
+
+    /// What the URL itself says, as opposed to what the paste said about it. Only remote servers
+    /// have anything here, so the row is absent rather than blank for a local one.
+    @ViewBuilder private var inspectionLine: some View {
+        if checking {
+            HStack(spacing: Space.xs) {
+                ProgressView().controlSize(.mini)
+                Text("Checking…").font(Typography.caption).foregroundStyle(.secondary)
+            }
+        } else if let error = inspectionError {
+            statusLine("Couldn't check this URL (\(error))", symbol: "questionmark.circle", tint: .secondary)
+        } else if let inspection {
+            verdict(inspection)
+        }
+    }
+
+    @ViewBuilder private func verdict(_ i: URLInspection) -> some View {
+        switch i.parsedVerdict {
+        case .mcpEndpoint:
+            statusLine("MCP endpoint · \(authSentence(i))", symbol: "checkmark.circle", tint: .green)
+        case .notMCP:
+            HStack(alignment: .firstTextBaseline, spacing: Space.xs) {
+                statusLine(notMCPSentence(i), symbol: "exclamationmark.triangle", tint: .red)
+                if let suggestion = i.suggestion {
+                    Button("Use it") { paste = suggestion }
+                        .buttonStyle(.pressable)
+                        .font(Typography.caption)
+                }
+            }
+        case .unreachable, nil:
+            statusLine("Unreachable (\(i.detail))", symbol: "bolt.horizontal", tint: .orange)
+        }
+    }
+
+    private func authSentence(_ i: URLInspection) -> String {
+        guard i.authRequired else { return "no sign-in needed" }
+        switch i.authKind {
+        case .oauth: return "needs sign-in (OAuth)"
+        case .header: return "needs an API key header"
+        case .none: return "no sign-in needed"
+        }
+    }
+
+    private func notMCPSentence(_ i: URLInspection) -> String {
+        let opening = "Not an MCP endpoint (\(i.detail))."
+        guard let suggestion = i.suggestion else { return opening }
+        return "\(opening) Did you mean \(suggestion)?"
+    }
+
+    private func statusLine(_ text: String, symbol: String, tint: some ShapeStyle) -> some View {
+        Label {
+            Text(text)
+                .font(Typography.caption)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+        } icon: {
+            Image(systemName: symbol).font(.system(size: 10))
+        }
+        .foregroundStyle(tint)
+    }
+
+    /// Asks the daemon what the pasted URL is, a beat after it stops changing. Cancellation is the
+    /// whole design: `.task(id:)` kills the check for a URL nobody is looking at any more, and the
+    /// answer to it is dropped rather than shown against the URL that replaced it.
+    private func inspect() async {
+        inspection = nil
+        inspectionError = nil
+        // A different URL is a different server, so an auth kind chosen for the last one no longer
+        // stands in the way of what this one reports.
+        authEdited = false
+        guard let url = remoteURL else { checking = false; return }
+        checking = true
+        try? await Task.sleep(for: .milliseconds(400))
+        guard !Task.isCancelled else { return }
+        do {
+            let result = try await daemon.inspect(url)
+            guard !Task.isCancelled else { return }
+            inspection = result
+            // Editable, not imposed: the picker moves to what the endpoint asked for, and the user
+            // can still overrule it — a server behind a header the probe cannot see, say.
+            if !authEdited, result.parsedVerdict == .mcpEndpoint {
+                auth = result.authRequired ? result.authKind : .none
+            }
+        } catch {
+            guard !Task.isCancelled else { return }
+            inspectionError = reason(error)
+        }
+        checking = false
+    }
+
+    /// The daemon's own words for a refusal; anything else is a transport failure, which has no
+    /// sentence in it worth showing.
+    private func reason(_ error: Error) -> String {
+        if case ControlClientError.remote(let why) = error { return why }
+        return String(describing: error)
     }
 
     private func preview(_ server: ExternalServer) -> some View {
@@ -291,7 +434,9 @@ struct AddServerSheet: View {
     private var authField: some View {
         VStack(alignment: .leading, spacing: Space.xs) {
             Text("Auth").font(Typography.caption).foregroundStyle(.secondary)
-            Picker("Auth", selection: $auth) {
+            // Writing through the binding is the only signal that the *user* chose this kind; the
+            // inspection writes `auth` directly, and must not read its own answer back as an edit.
+            Picker("Auth", selection: Binding(get: { auth }, set: { auth = $0; authEdited = true })) {
                 Text("None").tag(AuthKind.none)
                 Text("OAuth").tag(AuthKind.oauth)
                 Text("Header").tag(AuthKind.header)
@@ -328,15 +473,45 @@ struct AddServerSheet: View {
 
     // MARK: footer
 
-    private var buttons: some View {
-        HStack {
-            Spacer(minLength: 0)
-            Button("Cancel", role: .cancel) { dismiss() }
-                .keyboardShortcut(.cancelAction)
-            Button("Add") { add() }
-                .keyboardShortcut(.defaultAction)
-                .disabled(!canAdd)
+    @ViewBuilder private var buttons: some View {
+        if let error = addError {
+            statusLine(error, symbol: "exclamationmark.triangle", tint: .red)
         }
+        if let added {
+            signInRow(added)
+        } else {
+            HStack {
+                if adding { ProgressView().controlSize(.small) }
+                Spacer(minLength: 0)
+                Button("Cancel", role: .cancel) { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Add") { add() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!canAdd)
+            }
+        }
+    }
+
+    /// A server added as OAuth exists but can't be reached yet, and the sign-in is one browser
+    /// round trip away. Asking here, while the user is still thinking about this server, is worth
+    /// more than a badge they'll find later.
+    private func signInRow(_ added: AddedServer) -> some View {
+        HStack(spacing: Space.s) {
+            Text("Added \(added.name). Sign in now?")
+                .font(Typography.body)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: Space.m)
+            Button("Later") { dismiss() }
+                .keyboardShortcut(.cancelAction)
+            Button("Sign in") {
+                daemon.startAuth(added.id)
+                dismiss()
+            }
+            .buttonStyle(.borderedProminent)
+            .keyboardShortcut(.defaultAction)
+        }
+        .transition(.opacity)
     }
 
     // MARK: parsing and submission
@@ -356,12 +531,31 @@ struct AddServerSheet: View {
         headerRows = single.headers.sorted { $0.key < $1.key }.map { KeyValueRow(key: $0.key, value: $0.value) }
     }
 
+    /// Awaited rather than fired off, because the daemon inspects the URL again on its way in and
+    /// can still refuse — and because a server added needing a sign-in has one more thing to say.
     private func add() {
         let enabled = Dictionary(uniqueKeysWithValues: clients.map { ($0, true) })
-        for server in parsed.servers {
-            daemon.add(params(for: server, clients: enabled))
+        let requests = parsed.servers.map { params(for: $0, clients: enabled) }
+        adding = true
+        addError = nil
+        Task {
+            defer { adding = false }
+            var signIn: AddedServer?
+            for request in requests {
+                do {
+                    let id = try await daemon.addAwaiting(request)
+                    // Only the last one of a batch is offered, and a batch is all `auth: .none`
+                    // anyway — the sheet only offers auth for a single server.
+                    if request.auth == .oauth, let id {
+                        signIn = AddedServer(id: id, name: request.name)
+                    }
+                } catch {
+                    addError = reason(error)
+                    return
+                }
+            }
+            if let signIn { added = signIn } else { dismiss() }
         }
-        dismiss()
     }
 
     /// The single-server case sends what is on screen; a multi-server paste sends what was parsed,
@@ -382,7 +576,10 @@ struct AddServerSheet: View {
                                env: server.kind == .stdio ? dictionary(envRows) : [:],
                                url: server.url,
                                headers: server.kind == .remote ? dictionary(headerRows) : [:],
-                               transport: server.transport,
+                               // What the endpoint answered to beats what the paste guessed: an
+                               // SSE server behind a URL that doesn't say so is exactly the case
+                               // the check exists for.
+                               transport: inspection?.transport ?? server.transport,
                                auth: kind, clients: clients,
                                headerName: credential ? trimmedHeaderName : nil,
                                headerValue: credential ? headerValue : nil)

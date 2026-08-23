@@ -217,7 +217,36 @@ final class DaemonClient {
     }
 
     func remove(_ id: String) { run(.removeServer(.init(id: id))) }
-    func add(_ p: AddServerParams) { run(.addServer(p)) }
+
+    /// Adds and waits, answering with the new server's id — which the daemon mints, and only
+    /// reports through the status that follows, so it is matched back by the name we asked for.
+    /// The Add sheet needs it to offer the sign-in that a freshly added OAuth server is waiting on.
+    @discardableResult
+    func addAwaiting(_ p: AddServerParams) async throws -> String? {
+        _ = try await send(.addServer(p))
+        // The add syncs, so a status is already on its way; asking closes the gap in which the
+        // sheet would look for a server the app has not been told about yet.
+        if case .status(let s) = try await send(.status) { apply(s) }
+        return status?.servers.first { $0.server.name == p.name }?.id
+    }
+
+    /// What a URL is, before anyone commits to adding it. On the aux link: it dials the internet,
+    /// and the user is still typing into a form whose toggles must stay live.
+    func inspect(_ url: String) async throws -> URLInspection {
+        guard case .inspection(let i) = try await auxSend(.inspectURL(.init(url: url))) else {
+            throw ControlClientError.remote("The background service did not answer with an inspection")
+        }
+        return i
+    }
+
+    /// Curated list plus the registry. Also slow — it may go to the network — so also on the aux
+    /// link, where a search per keystroke can't hold up a toggle.
+    func searchCatalog(query: String, limit: Int = 30) async throws -> [CatalogEntry] {
+        guard case .catalog(let entries) = try await auxSend(.catalogSearch(.init(query: query, limit: limit))) else {
+            throw ControlClientError.remote("The background service did not answer with a catalog")
+        }
+        return entries
+    }
     /// Only the fields set on `p` change; everything left nil keeps its stored value.
     func update(_ p: UpdateServerParams) { run(.updateServer(p)) }
     func reimport(_ c: ClientID) { run(.reimport(.init(client: c))) }
