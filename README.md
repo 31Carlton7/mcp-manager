@@ -21,7 +21,7 @@ Screenshots coming with the first release.
 Once the first release is tagged:
 
 ```
-brew install --cask carltonaikins/tap/mcp-manager
+brew install --cask 31carlton7/tap/mcp-manager
 ```
 
 ### Build from source
@@ -29,7 +29,7 @@ brew install --cask carltonaikins/tap/mcp-manager
 Needs Xcode 26 and `brew install xcodegen`.
 
 ```
-git clone https://github.com/carltonaikins/mcp-manager.git
+git clone https://github.com/31Carlton7/mcp-manager.git
 cd mcp-manager/Apps/MCPManager
 xcodegen generate
 xcodebuild -project MCPManager.xcodeproj -scheme MCPManager -configuration Debug \

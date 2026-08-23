@@ -4,10 +4,10 @@ cask "mcp-manager" do
   version "0.1.0"
   sha256 "0000000000000000000000000000000000000000000000000000000000000000"
 
-  url "https://github.com/carltonaikins/mcp-manager/releases/download/v#{version}/MCPManager-#{version}.dmg"
+  url "https://github.com/31Carlton7/mcp-manager/releases/download/v#{version}/MCPManager-#{version}.dmg"
   name "MCP Manager"
   desc "One library of MCP servers, synced into every MCP client on your Mac"
-  homepage "https://github.com/carltonaikins/mcp-manager"
+  homepage "https://github.com/31Carlton7/mcp-manager"
 
   depends_on macos: ">= :tahoe"
 

@@ -62,4 +62,4 @@ First release. Everything below is new.
   while it is open. mcpm reads that as the user removing the server and turns the checkbox off;
   restart Claude Code and re-enable it.
 
-[0.1.0]: https://github.com/carltonaikins/mcp-manager/releases/tag/v0.1.0
+[0.1.0]: https://github.com/31Carlton7/mcp-manager/releases/tag/v0.1.0

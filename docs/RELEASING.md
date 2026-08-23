@@ -2,7 +2,7 @@
 
 Tagging `vX.Y.Z` runs `.github/workflows/release.yml`, which builds the app, signs it with a
 Developer ID certificate, notarizes and staples it, wraps it in a DMG, attaches the DMG to a GitHub
-release, and pushes an updated cask to `carltonaikins/homebrew-tap`. Everything below is the one
+release, and pushes an updated cask to `31Carlton7/homebrew-tap`. Everything below is the one
 time setup that workflow depends on, plus what to check after a release.
 
 ## What ships
@@ -67,8 +67,8 @@ xcrun notarytool history --apple-id "<email>" --team-id "<TEAMID>" --password "<
 
 A token that can push to the Homebrew tap.
 
-1. Create the repo **`carltonaikins/homebrew-tap`** (public, that name exactly, so that
-   `brew install --cask carltonaikins/tap/mcp-manager` resolves). A `Casks/` directory is enough;
+1. Create the repo **`31Carlton7/homebrew-tap`** (public, that name exactly, so that
+   `brew install --cask 31carlton7/tap/mcp-manager` resolves). A `Casks/` directory is enough;
    the workflow creates it if it is missing.
 2. Create a token that can write to it. Either a fine-grained personal access token scoped to that
    one repository with **Contents: Read and write**, or a classic token with `repo`. Fine-grained
@@ -99,7 +99,7 @@ edit it here rather than in the tap.
 5. Verify from a clean Mac (or at least a different one):
 
    ```
-   brew install --cask carltonaikins/tap/mcp-manager
+   brew install --cask 31carlton7/tap/mcp-manager
    spctl --assess --type execute -vv /Applications/MCPManager.app
    ```
 
