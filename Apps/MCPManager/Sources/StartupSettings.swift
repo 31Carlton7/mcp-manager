@@ -107,6 +107,11 @@ final class StartupSettings {
             return
         }
         reboundThisLaunch = true
+        // A job launchd has already given up on ("spawn failed", stale code requirement after a
+        // rebuild) is not cleared by `unregister()` alone; boot it out of the domain first so the
+        // fresh `register()` starts from nothing. Best effort: it fails harmlessly when the job
+        // isn't loaded.
+        _ = try? await Self.launchctl(["bootout", "gui/\(getuid())/\(Self.agentLabel)"])
         try? await agent.unregister()
         do {
             try agent.register()
