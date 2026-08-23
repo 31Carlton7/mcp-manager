@@ -10,7 +10,7 @@ permissions:
 jobs:
   release:
     name: Build, sign, notarize, publish
-    runs-on: macos-15
+    runs-on: macos-26
     env:
       APP_PATH: Apps/MCPManager/build/Build/Products/Release/MCPManager.app
     steps:
@@ -18,9 +18,10 @@ jobs:
 
       - name: Select Xcode
         run: |
-          if [ -d /Applications/Xcode_26.app ]; then
-            sudo xcode-select -s /Applications/Xcode_26.app
-          fi
+          # Pick the newest Xcode 26.x on the image; fail loudly if none (the app needs the 26 SDK).
+          latest=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
+          if [ -n "$latest" ]; then sudo xcode-select -s "$latest"; fi
+          xcodebuild -version | grep -q "Xcode 26" || { echo "Xcode 26 not found on this runner"; ls /Applications | grep Xcode; exit 1; }
           xcodebuild -version
 
       # The tag is only a label; MCPMVersion.current is what the daemon reports and what the app's
