@@ -38,7 +38,8 @@ let package = Package(
         ]),
         // The daemon's request handling lives in a library rather than the executable so it can be
         // tested: a test target cannot import an executable target.
-        .target(name: "MCPMDaemon", dependencies: ["MCPMCore", "MCPMControl", "MCPMGateway"]),
+        .target(name: "MCPMDaemon", dependencies: ["MCPMCore", "MCPMControl", "MCPMGateway"],
+                resources: [.copy("Resources")]),
         .executableTarget(name: "mcpmd", dependencies: ["MCPMCore", "MCPMControl", "MCPMGateway", "MCPMDaemon"]),
         .testTarget(name: "MCPMCoreTests", dependencies: ["MCPMCore"], resources: [.copy("Fixtures")]),
         .testTarget(name: "MCPMControlTests", dependencies: ["MCPMControl"]),
