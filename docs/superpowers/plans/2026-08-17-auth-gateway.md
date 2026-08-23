@@ -137,3 +137,13 @@ Apps/MCPManager/Sources/…                  DaemonClient commands; inspector Au
 
 ## Self-review
 Spec §4.4 routes/behaviour → Task 4; §4.5 OAuth → Tasks 2–3; §11 security (loopback, Host check, strip Authorization, no body logs, Keychain, 0600) → Tasks 1, 4; `auth.*` commands → Task 6; UI → Task 7. Names: `TokenStore/TokenRecord/HeaderSecret/ClientRegistration`, `OAuthClient`, `AuthManager.startAuth/handleCallback/bearer/forceRefresh/signOut/forget/setHeader/state(for:auth:)/stateChanged`, `Gateway/GatewayConfig/GatewayServerSource`, `MCPProbe.remote/stdio → ProbeResult`, `AuthState`, protocol `.authorizeURL/.testResult`, `DaemonStatus.gatewayPort`.
+
+## Smoke test 2026-08-22 (Task 8, real machine, Notion)
+
+| Check | Result |
+|---|---|
+| Switch `notion` to OAuth in the inspector | ✅ All four client configs rewritten to `http://localhost:7337/s/notion/mcp` (Claude Desktop via `mcp-remote` bridge). |
+| Sign in… → browser consent → callback | ✅ Discovery + dynamic client registration + PKCE against `mcp.notion.com`. First attempt failed at the Keychain write (`UNIX[Operation not permitted]`) because the daemon had been hand-started from a sandboxed shell after a reboot; restarted un-sandboxed → token stored as `co.charmtechnologies.mcpm / token.notion`. |
+| State | ✅ `connected` |
+| Test connection (through the gateway) | ✅ `Notion MCP 1.2.0 · 28 tools · 750 ms` |
+| Lessons | The daemon must be launchd-started (LaunchAgent) — hand-started daemons inherit the parent's sandbox/TCC context and die on reboot. Tracked as the next work item. |
