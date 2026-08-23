@@ -174,3 +174,19 @@ func authAndTestCommandsRoundTrip(command: ControlCommand) throws {
     #expect(status.settingsPendingRestart == false)
     #expect(status.gatewayPort == 7337)
 }
+
+@Test func addServerParamsCarriesTheTransport() throws {
+    let p = AddServerParams(name: "a", kind: .remote, url: "https://a/mcp", transport: .sse)
+    let req = ControlRequest(id: 1, command: .addServer(p))
+    let round = try JSONDecoder.mcpm.decode(ControlRequest.self, from: JSONEncoder.mcpmWire.encode(req))
+    guard case .addServer(let back) = round.command else { Issue.record("wrong command"); return }
+    #expect(back.transport == .sse)
+}
+
+/// An older app sends no `transport`; that is HTTP, not a decode failure.
+@Test func addServerParamsDecodesWithoutTransport() throws {
+    let json = #"{"id":9,"method":"servers.add","params":{"name":"a","kind":"remote","args":[],"env":{},"url":"https://a/mcp","auth":"none","clients":{}}}"#
+    let req = try JSONDecoder.mcpm.decode(ControlRequest.self, from: Data(json.utf8))
+    guard case .addServer(let p) = req.command else { Issue.record("wrong command"); return }
+    #expect(p.transport == nil)
+}

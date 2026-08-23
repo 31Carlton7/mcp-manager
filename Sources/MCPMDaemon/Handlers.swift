@@ -87,7 +87,8 @@ public struct Handlers: Sendable {
             let id = try await coord.mutate { lib in
                 let id = Slug.unique(Slug.make(p.name), existing: Set(lib.servers.map(\.id)))
                 lib.servers.append(Server(id: id, name: p.name, kind: p.kind, command: p.command, args: p.args,
-                                          env: p.env, url: p.url, headers: p.headers, auth: p.auth, clients: p.clients,
+                                          env: p.env, url: p.url, headers: p.headers, transport: p.transport,
+                                          auth: p.auth, clients: p.clients,
                                           source: "manual", createdAt: .init()))
                 return id
             }

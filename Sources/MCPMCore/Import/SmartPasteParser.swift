@@ -63,14 +63,14 @@ public enum SmartPasteParser {
 
     // MARK: claude mcp add
 
-    /// Flags of `claude mcp add` that take a following value. Scope and transport are read and
-    /// dropped: which clients get the server is the sheet's own question, and the transport is
-    /// implied by what follows the name.
+    /// Flags of `claude mcp add` that take a following value. Scope is read and dropped — which
+    /// clients get the server is the sheet's own question.
     static let claudeValueFlags: Set<String> = ["--scope", "-s", "--transport", "-t", "--env", "-e", "--header", "-H"]
 
     /// `claude mcp add [flags] <name> [--] <url | command…>`, as copy-pasted from a README.
     static func parseClaudeAdd(_ tokens: [String]) -> Result {
         var env: [String: String] = [:], headers: [String: String] = [:]
+        var transport: Transport?
         var i = 0
 
         while i < tokens.count, tokens[i].hasPrefix("-"), tokens[i] != "--" {
@@ -86,6 +86,9 @@ public enum SmartPasteParser {
             switch (flag, value) {
             case ("--env", let v?), ("-e", let v?): if let (k, v) = pair(v, separator: "=") { env[k] = v }
             case ("--header", let v?), ("-H", let v?): if let (k, v) = pair(v, separator: ":") { headers[k] = v }
+            // `--transport stdio` says nothing a command line doesn't already say, so only the
+            // one value that changes how a remote server is dialled is kept.
+            case ("--transport", "sse"), ("-t", "sse"): transport = .sse
             default: break
             }
             i += 1
@@ -100,7 +103,8 @@ public enum SmartPasteParser {
         let rest = Array(tokens[i...])
 
         if let first = rest.first, let host = remoteHost(first) {
-            return Result(servers: [ExternalServer(name: name, kind: .remote, url: first, headers: headers)],
+            return Result(servers: [ExternalServer(name: name, kind: .remote, url: first,
+                                                   headers: headers, transport: transport)],
                           summary: "Remote server · \(host)")
         }
         guard let command = rest.first else {
@@ -130,7 +134,9 @@ public enum SmartPasteParser {
             // bare server object → derive a name
             let name = one.kind == .remote ? nameFromHost(URL(string: one.url ?? "")?.host ?? "server")
                                            : nameFromCommand(one.command ?? "server", args: one.args)
-            servers = [ExternalServer(name: name, kind: one.kind, command: one.command, args: one.args, env: one.env, url: one.url, headers: one.headers)]
+            servers = [ExternalServer(name: name, kind: one.kind, command: one.command, args: one.args,
+                                      env: one.env, url: one.url, headers: one.headers,
+                                      transport: one.transport)]
         } else {
             servers = obj.compactMap { k, v in (v as? [String: Any]).flatMap { JSONMCPServers.external(name: k, dict: $0) } }
         }

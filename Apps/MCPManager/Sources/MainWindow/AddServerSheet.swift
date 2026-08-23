@@ -187,7 +187,7 @@ struct AddServerSheet: View {
     private func previewServer(_ e: ExternalServer) -> Server {
         Server(id: "preview", name: trimmedName.isEmpty ? e.name : trimmedName, kind: e.kind,
                command: e.command, args: e.args, env: e.env, url: e.url, headers: e.headers,
-               source: "preview", createdAt: Date(timeIntervalSince1970: 0))
+               transport: e.transport, source: "preview", createdAt: Date(timeIntervalSince1970: 0))
     }
 
     // MARK: clients
@@ -370,7 +370,8 @@ struct AddServerSheet: View {
         guard single != nil else {
             return AddServerParams(name: server.name, kind: server.kind, command: server.command,
                                    args: server.args, env: server.env, url: server.url,
-                                   headers: server.headers, auth: .none, clients: clients)
+                                   headers: server.headers, transport: server.transport,
+                                   auth: .none, clients: clients)
         }
         let kind = server.kind == .remote ? auth : .none
         // The credential travels with the add: the daemon mints the id, so it is the only one that
@@ -381,6 +382,7 @@ struct AddServerSheet: View {
                                env: server.kind == .stdio ? dictionary(envRows) : [:],
                                url: server.url,
                                headers: server.kind == .remote ? dictionary(headerRows) : [:],
+                               transport: server.transport,
                                auth: kind, clients: clients,
                                headerName: credential ? trimmedHeaderName : nil,
                                headerValue: credential ? headerValue : nil)

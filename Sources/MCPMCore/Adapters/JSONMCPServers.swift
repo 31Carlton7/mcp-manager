@@ -18,7 +18,8 @@ public enum JSONMCPServers {
     static func external(name: String, dict d: [String: Any]) -> ExternalServer? {
         if let url = d["url"] as? String {
             return ExternalServer(name: name, kind: .remote, url: url,
-                                  headers: d["headers"] as? [String: String] ?? [:])
+                                  headers: d["headers"] as? [String: String] ?? [:],
+                                  transport: d["type"] as? String == "sse" ? .sse : nil)
         }
         if let command = d["command"] as? String {
             return ExternalServer(name: name, kind: .stdio, command: command,
@@ -31,6 +32,11 @@ public enum JSONMCPServers {
     /// Merges `servers` into the existing section: keeps unknown fields of servers we keep,
     /// removes servers not in `servers`, adds new ones, and never touches entries we don't
     /// recognize as a server shape. Everything outside `key` is untouched.
+    ///
+    /// `writeTypeKey` is whether this client wants a `type` on every entry (Claude Code does;
+    /// Cursor's files don't carry one). It is not the whole story for remote servers: an SSE
+    /// server needs `"type": "sse"` wherever it is written, since that key is the only place the
+    /// transport can be said at all — and Cursor reads it when it is there.
     public static func render(_ servers: [ExternalServer], over data: Data?, key: String = "mcpServers",
                               writeTypeKey: Bool) throws -> Data {
         var root: [String: Any] = [:]
@@ -49,7 +55,6 @@ public enum JSONMCPServers {
         }
         for s in servers {
             var d = existing[s.name] as? [String: Any] ?? [:]
-            let priorType = d["type"] as? String
             // always strip both shapes' keys so a stdio<->remote flip is clean; `type` is re-added below if requested
             for k in ["command", "args", "env", "url", "headers", "type"] { d.removeValue(forKey: k) }
             switch s.kind {
@@ -66,10 +71,10 @@ public enum JSONMCPServers {
                     throw AdapterError.parse("remote server '\(s.name)' has no url")
                 }
                 d["url"] = url
-                // The library has one `remote` kind but clients distinguish http from sse, so
-                // whichever the file already had survives a rewrite; only a flip to stdio and
-                // back resets it. Otherwise the first write would move an sse server to http.
-                if writeTypeKey { d["type"] = priorType == "sse" ? "sse" : "http" }
+                // The model is authoritative: a server switched from SSE to HTTP has to actually
+                // move, so what the file used to say does not survive the rewrite.
+                if s.transport == .sse { d["type"] = "sse" }
+                else if writeTypeKey { d["type"] = "http" }
                 if !s.headers.isEmpty { d["headers"] = s.headers }
             }
             section[s.name] = d

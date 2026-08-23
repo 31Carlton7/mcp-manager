@@ -4,6 +4,12 @@ import TOMLKit
 /// Codex `~/.codex/config.toml`: `[mcp_servers.<name>]` tables (+ optional `[mcp_servers.<name>.env]`).
 /// Reads with TOMLKit; writes by text-splicing (see `CodexTOMLSplicer`) so comments, unrelated tables
 /// and per-server keys we don't model survive verbatim.
+///
+/// Codex's remote servers are Streamable HTTP only, so its TOML has no transport key and nothing
+/// here reads or writes one. A server the library marks SSE is still written out — Codex simply
+/// connects to it over HTTP, which is the only thing it can do — and the field is neither lost
+/// (it lives in the library, not in this file) nor allowed to force a rewrite of a file whose
+/// bytes would be identical anyway.
 public struct CodexAdapter: ClientAdapter {
     public let id = ClientID.codex
     public let displayName = "Codex"
@@ -45,7 +51,9 @@ public struct CodexAdapter: ClientAdapter {
     public func render(_ servers: [ExternalServer], over data: Data?) throws -> Data {
         let text = data.map { String(decoding: $0, as: UTF8.self) } ?? ""
         let existing = try parse(data)
-        if let data, Set(existing) == Set(servers) { return data }
+        // Compared on what this file can actually express: `parse` can never report a transport,
+        // so comparing against one would miss the early-out for every SSE server forever.
+        if let data, Set(existing) == Set(servers.map(Self.withoutTransport)) { return data }
         let existingByName = Dictionary(existing.map { ($0.name, $0) }, uniquingKeysWith: { a, _ in a })
         let split = CodexTOMLSplicer.split(text)
         let wanted = Set(servers.map(\.name))
@@ -79,6 +87,13 @@ public struct CodexAdapter: ClientAdapter {
         if !s.isEmpty && !s.hasSuffix(nl) { s += nl }
         try Self.assertValidTOML(s)
         return Data(s.utf8)
+    }
+
+    /// The server as this file can hold it. See the type's note on transport.
+    static func withoutTransport(_ s: ExternalServer) -> ExternalServer {
+        var copy = s
+        copy.transport = nil
+        return copy
     }
 
     /// A whole block for a server we have no previous text for.

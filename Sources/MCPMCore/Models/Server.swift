@@ -11,16 +11,21 @@ public struct Server: Codable, Equatable, Sendable, Identifiable {
     public var env: [String: String]
     public var url: String?
     public var headers: [String: String]
+    /// nil means Streamable HTTP; see `Transport`. Normalized on the way in, so a stdio server and
+    /// an HTTP one are both stored as "no transport".
+    public var transport: Transport?
     public var auth: AuthKind
     public var clients: [ClientID: Bool]
     public var source: String
     public var createdAt: Date
 
     public init(id: String, name: String, kind: ServerKind, command: String? = nil, args: [String] = [],
-                env: [String: String] = [:], url: String? = nil, headers: [String: String] = [:], auth: AuthKind = .none,
+                env: [String: String] = [:], url: String? = nil, headers: [String: String] = [:],
+                transport: Transport? = nil, auth: AuthKind = .none,
                 clients: [ClientID: Bool] = [:], source: String, createdAt: Date) {
         self.id = id; self.name = name; self.kind = kind; self.command = command; self.args = args
         self.env = env; self.url = url; self.headers = headers; self.auth = auth; self.clients = clients
+        self.transport = Transport.stored(transport, kind: kind)
         self.source = source
         // JSONEncoder.mcpm's .iso8601 strategy has whole-second resolution (no fractional
         // seconds), so normalize here to keep in-memory equality consistent with a save/load
@@ -29,11 +34,11 @@ public struct Server: Codable, Equatable, Sendable, Identifiable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, kind, command, args, env, url, headers, auth, clients, source, createdAt
+        case id, name, kind, command, args, env, url, headers, transport, auth, clients, source, createdAt
     }
 
-    /// Custom decode so `headers` defaults to `[:]` when absent, keeping older library files
-    /// (written before `headers` existed) loadable.
+    /// Custom decode so `headers` and `transport` default when absent, keeping older library files
+    /// (written before either existed) loadable.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
@@ -44,6 +49,7 @@ public struct Server: Codable, Equatable, Sendable, Identifiable {
         env = try c.decode([String: String].self, forKey: .env)
         url = try c.decodeIfPresent(String.self, forKey: .url)
         headers = try c.decodeIfPresent([String: String].self, forKey: .headers) ?? [:]
+        transport = Transport.stored(try c.decodeIfPresent(Transport.self, forKey: .transport), kind: kind)
         auth = try c.decode(AuthKind.self, forKey: .auth)
         clients = try c.decode([ClientID: Bool].self, forKey: .clients)
         source = try c.decode(String.self, forKey: .source)
@@ -60,15 +66,19 @@ public struct Server: Codable, Equatable, Sendable, Identifiable {
         case .stdio:
             return ExternalServer(name: name, kind: .stdio, command: command, args: args, env: env)
         case .remote:
+            // The transport travels even through the gateway: the proxy speaks whatever the
+            // upstream does, so the client on the other side still has to be told which.
             let u = usesGateway ? GatewayURL.make(port: gatewayPort, serverID: id) : (url ?? "")
-            return ExternalServer(name: name, kind: .remote, url: u, headers: usesGateway ? [:] : headers)
+            return ExternalServer(name: name, kind: .remote, url: u,
+                                  headers: usesGateway ? [:] : headers, transport: transport)
         }
     }
 
     /// Build a library server from something found in a client file.
     public static func imported(_ e: ExternalServer, id: String, from client: ClientID, now: Date) -> Server {
         Server(id: id, name: e.name, kind: e.kind, command: e.command, args: e.args, env: e.env,
-               url: e.url, headers: e.headers, auth: .none, clients: [client: true], source: "imported:\(client.rawValue)",
+               url: e.url, headers: e.headers, transport: e.transport,
+               auth: .none, clients: [client: true], source: "imported:\(client.rawValue)",
                createdAt: now)
     }
 }

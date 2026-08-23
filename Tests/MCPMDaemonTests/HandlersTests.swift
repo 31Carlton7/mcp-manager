@@ -294,3 +294,13 @@ func settingsSetRefusesAPortOutsideTheValidRange(port: Int) async throws {
     #expect(s.gatewayPort == 8080)
     #expect(s.backupRetention == 3)
 }
+
+/// A transport read off a paste has nowhere else to be learned, so `servers.add` has to carry it
+/// into the library or every SSE server would be added as an HTTP one.
+@Test func addingAServerKeepsTheTransportItWasPastedWith() async throws {
+    let e = try await makeEnv()
+    var p = remoteServer(name: "streamy", auth: .none)
+    p.transport = .sse
+    try await add(p, to: e.handlers)
+    #expect(await e.handlers.status().servers.first { $0.id == "streamy" }?.server.transport == .sse)
+}

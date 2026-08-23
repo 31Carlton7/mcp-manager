@@ -64,12 +64,16 @@ private let sample = """
     #expect(aWithoutType["headers"] == nil)
 }
 
+/// The transport is modelled, so it survives a rewrite by being carried on the server rather than
+/// by being copied out of the file it is being written back to.
 @Test func jsonRenderKeepsAnExistingSSETransport() throws {
     let existing = """
     {"mcpServers":{"a":{"type":"sse","url":"u"}}}
     """
-    let out = try JSONMCPServers.render([ExternalServer(name: "a", kind: .remote, url: "u2")],
-                                        over: Data(existing.utf8), writeTypeKey: true)
+    var parsed = try JSONMCPServers.parse(Data(existing.utf8))[0]
+    #expect(parsed.transport == .sse)
+    parsed.url = "u2"
+    let out = try JSONMCPServers.render([parsed], over: Data(existing.utf8), writeTypeKey: true)
     let a = ((try JSONSerialization.jsonObject(with: out) as! [String: Any])["mcpServers"] as! [String: Any])["a"] as! [String: Any]
     #expect(a["type"] as! String == "sse")
     #expect(a["url"] as! String == "u2")
