@@ -218,16 +218,19 @@ final class DaemonClient {
 
     func remove(_ id: String) { run(.removeServer(.init(id: id))) }
 
-    /// Adds and waits, answering with the new server's id — which the daemon mints, and only
-    /// reports through the status that follows, so it is matched back by the name we asked for.
-    /// The Add sheet needs it to offer the sign-in that a freshly added OAuth server is waiting on.
+    /// Adds and waits, answering with the new server's id — which the daemon mints and only
+    /// reports through the status that follows, so it is found again as the server that wasn't
+    /// there before. The Add sheet needs it to offer the sign-in a fresh OAuth server waits on.
     @discardableResult
     func addAwaiting(_ p: AddServerParams) async throws -> String? {
+        let existing = Set((status?.servers ?? []).map(\.id))
         _ = try await send(.addServer(p))
         // The add syncs, so a status is already on its way; asking closes the gap in which the
         // sheet would look for a server the app has not been told about yet.
         if case .status(let s) = try await send(.status) { apply(s) }
-        return status?.servers.first { $0.server.name == p.name }?.id
+        // By id and name both: nothing stops two servers sharing a name, and the one that matters
+        // is the one this call brought into being.
+        return status?.servers.first { !existing.contains($0.id) && $0.server.name == p.name }?.id
     }
 
     /// What a URL is, before anyone commits to adding it. On the aux link: it dials the internet,
@@ -247,6 +250,7 @@ final class DaemonClient {
         }
         return entries
     }
+
     /// Only the fields set on `p` change; everything left nil keeps its stored value.
     func update(_ p: UpdateServerParams) { run(.updateServer(p)) }
     func reimport(_ c: ClientID) { run(.reimport(.init(client: c))) }
