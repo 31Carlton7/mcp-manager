@@ -54,14 +54,13 @@ jobs:
         working-directory: Apps/MCPManager
         run: xcodegen generate
 
-      # Signing happens as its own step below, so the build itself is unsigned. `-target` rather
-      # than `-scheme`: project.yml declares no shared scheme.
+      # Signing happens as its own step below, so the build itself is unsigned.
       - name: Build app (Release)
         working-directory: Apps/MCPManager
         run: |
           xcodebuild \
             -project MCPManager.xcodeproj \
-            -target MCPManager \
+            -scheme MCPManager \
             -configuration Release \
             -derivedDataPath build \
             MARKETING_VERSION=${{ steps.version.outputs.version }} \

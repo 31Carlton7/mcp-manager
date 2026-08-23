@@ -119,9 +119,8 @@ resolves `CFBundleShortVersionString` from `$(MARKETING_VERSION)` and `CFBundleV
 
 ## Notes on the build
 
-- The workflows use `xcodebuild -target MCPManager`, not `-scheme`. `project.yml` declares no
-  scheme, so XcodeGen writes no shared scheme into the generated project and a `-scheme` build
-  would depend on Xcode autocreating one on the runner.
+- `project.yml` declares a shared `MCPManager` scheme, so the workflows and the README build with
+  `xcodebuild -scheme MCPManager` (Xcode 26 requires a scheme when `-derivedDataPath` is used).
 - The build itself is unsigned (`CODE_SIGNING_ALLOWED=NO`); signing is a separate step so the
   nested `Contents/MacOS/mcpmd` can be signed first. Signing the outer bundle before the binaries
   inside it invalidates the outer signature.

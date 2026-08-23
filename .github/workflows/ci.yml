@@ -48,13 +48,12 @@ jobs:
         run: xcodegen generate
 
       # No signing identity on the runner, and none is needed to know the app compiles.
-      # `-target` rather than `-scheme`: project.yml declares no shared scheme.
       - name: Build app (Debug)
         working-directory: Apps/MCPManager
         run: |
           xcodebuild \
             -project MCPManager.xcodeproj \
-            -target MCPManager \
+            -scheme MCPManager \
             -configuration Debug \
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \

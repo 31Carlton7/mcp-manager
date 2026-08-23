@@ -32,7 +32,7 @@ Needs Xcode 26 and `brew install xcodegen`.
 git clone https://github.com/carltonaikins/mcp-manager.git
 cd mcp-manager/Apps/MCPManager
 xcodegen generate
-xcodebuild -project MCPManager.xcodeproj -target MCPManager -configuration Debug \
+xcodebuild -project MCPManager.xcodeproj -scheme MCPManager -configuration Debug \
   -derivedDataPath build build
 open build/Build/Products/Debug/MCPManager.app
 ```

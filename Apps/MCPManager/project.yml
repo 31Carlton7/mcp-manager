@@ -91,3 +91,15 @@ targets:
         SWIFT_STRICT_CONCURRENCY: complete
         ENABLE_HARDENED_RUNTIME: YES
         CODE_SIGN_STYLE: Automatic
+
+# Shared scheme so CI and the README can build with `-scheme MCPManager` (Xcode 26 requires a
+# scheme when -derivedDataPath is given).
+schemes:
+  MCPManager:
+    build:
+      targets:
+        MCPManager: all
+    run:
+      config: Debug
+    archive:
+      config: Release
