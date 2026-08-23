@@ -3,9 +3,10 @@ import ServiceManagement
 import MCPMCore
 import MCPMControl
 
-/// The main window: filters and search across the top, a grid of server cards, and an inspector
-/// that is always open on the right. Selection lives here because both the grid and the inspector
-/// need it; everything else about a server is read straight from the daemon's status.
+/// The main window: two tabs under one header — the library of servers, with filters, a grid of
+/// cards and an inspector on the right, and the catalog of servers there are to add. Selection
+/// lives here because both the grid and the inspector need it; everything else about a server is
+/// read straight from the daemon's status.
 struct MainWindowView: View {
     @Environment(DaemonClient.self) private var daemon
     @Environment(StartupSettings.self) private var startup
@@ -13,11 +14,14 @@ struct MainWindowView: View {
     /// Sticky per-user, not per-launch: someone who has said "not now" has answered the question.
     @AppStorage("dismissedStartupNudge") private var dismissedStartupNudge = false
 
+    @State private var tab: Tab = .servers
     @State private var selection: String?
     @State private var clientFilter: ClientID?
     @State private var kindFilter: ServerKind?
     @State private var query = ""
-    @State private var showAdd = false
+    /// The Add sheet, and what it opens on. A fresh request each time, so a sheet opened from the
+    /// catalog and one opened from the toolbar can never inherit each other's entry.
+    @State private var addRequest: AddRequest?
     @State private var showRemove = false
     @State private var showOnboarding = false
     /// Set once the sheet has been offered, so dismissing it doesn't immediately re-present it.
@@ -27,6 +31,15 @@ struct MainWindowView: View {
     /// ⌫ only means "remove" while the grid itself has focus — inside the search field it still
     /// deletes a character.
     @FocusState private var gridFocused: Bool
+
+    enum Tab: String, CaseIterable { case servers = "Servers", catalog = "Catalog" }
+
+    /// One press of Add. The id is what makes each press its own sheet rather than a re-run of the
+    /// last one.
+    private struct AddRequest: Identifiable {
+        let id = UUID()
+        var entry: CatalogEntry?
+    }
 
     private var selected: ServerStatus? {
         guard let selection else { return nil }
@@ -53,18 +66,25 @@ struct MainWindowView: View {
             Hairline()
             setupBanner
             startupNudge
-            content(for: servers)
+            switch tab {
+            case .servers: content(for: servers)
+            case .catalog: CatalogView { entry in addRequest = AddRequest(entry: entry) }
+            }
             banners
         }
         // On the container, not on the banner: a transition can only animate if the animation
         // outlives the view being inserted or removed.
         .animation(.snappy(duration: 0.2), value: showStartupNudge)
         .animation(.snappy(duration: 0.2), value: daemon.needsSetup)
-        .inspector(isPresented: .constant(true)) {
+        .animation(.snappy(duration: 0.2), value: tab)
+        // The inspector is about a selected server, and the catalog has none to select.
+        .inspector(isPresented: .constant(tab == .servers)) {
             InspectorView(serverID: selection, clear: { selection = nil })
                 .inspectorColumnWidth(min: 250, ideal: 280, max: 320)
         }
-        .sheet(isPresented: $showAdd) { AddServerSheet().environment(daemon) }
+        .sheet(item: $addRequest) { request in
+            AddServerSheet(prefill: request.entry).environment(daemon)
+        }
         .sheet(isPresented: $showOnboarding) {
             OnboardingSheet().environment(daemon).environment(startup)
         }
@@ -170,14 +190,20 @@ struct MainWindowView: View {
     private func header(count: Int) -> some View {
         GlassEffectContainer(spacing: Space.s) {
             HStack(spacing: Space.s) {
-                clientMenu
-                kindMenu
-                Text("\(count) \(count == 1 ? "server" : "servers")")
-                    .font(Typography.caption)
-                    .foregroundStyle(.secondary)
+                TextTabs(Tab.allCases, selection: $tab, title: \.rawValue)
+                    .fixedSize()
+                // The filters, the count and the search are all about the library; the catalog
+                // brings its own search and has nothing to filter.
+                if tab == .servers {
+                    clientMenu
+                    kindMenu
+                    Text("\(count) \(count == 1 ? "server" : "servers")")
+                        .font(Typography.caption)
+                        .foregroundStyle(.secondary)
+                }
                 Spacer(minLength: Space.m)
-                search
-                Button("Add", systemImage: "plus") { showAdd = true }
+                if tab == .servers { search }
+                Button("Add", systemImage: "plus") { addRequest = AddRequest() }
                     .buttonStyle(.borderedProminent)
                     .disabled(!daemon.isConnected)
                 SettingsLink {

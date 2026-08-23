@@ -6,6 +6,11 @@ import MCPMControl
 /// the `npx …` line from a README, or the whole `{"mcpServers": …}` block — is parsed live and the
 /// rest of the form fills itself in. The fields that almost nobody touches live behind Advanced.
 struct AddServerSheet: View {
+    /// A catalog entry the sheet opens on. It is written into the paste well rather than into the
+    /// fields, so a server picked from the catalog and a server pasted from a README take exactly
+    /// the same path through the form — and the URL is checked either way.
+    var prefill: CatalogEntry?
+
     @Environment(DaemonClient.self) private var daemon
     @Environment(\.dismiss) private var dismiss
 
@@ -130,7 +135,10 @@ struct AddServerSheet: View {
         }
         .padding(Space.l)
         .frame(width: 460)
-        .onAppear { clients = Set(daemon.installedClients.map(\.id)) }
+        .onAppear {
+            clients = Set(daemon.installedClients.map(\.id))
+            applyPrefill()
+        }
         // Parsing a JSON block on every keystroke is wasted work, and a half-typed URL briefly
         // parses as something else — so the form settles a beat after typing stops.
         .task(id: paste) {
@@ -533,6 +541,31 @@ struct AddServerSheet: View {
 
     /// Awaited rather than fired off, because the daemon inspects the URL again on its way in and
     /// can still refuse — and because a server added needing a sign-in has one more thing to say.
+    /// Fills the form from a catalog entry: the paste well gets the URL, or the command line, or
+    /// — when the entry names environment the command line has nowhere to put — the JSON the
+    /// parser also reads, so the placeholders arrive visible and editable.
+    private func applyPrefill() {
+        guard let prefill, paste.isEmpty else { return }
+        paste = pasteText(for: prefill)
+        name = prefill.name
+        nameEdited = true
+        reparse()
+        // After the reparse, which clears auth for anything that can't have it.
+        auth = prefill.auth
+    }
+
+    private func pasteText(for entry: CatalogEntry) -> String {
+        if entry.kind == .remote { return entry.url ?? "" }
+        let line = ([entry.command].compactMap { $0 } + entry.args).joined(separator: " ")
+        guard !entry.env.isEmpty else { return line }
+        let object: [String: Any] = ["command": entry.command ?? "", "args": entry.args, "env": entry.env]
+        guard let data = try? JSONSerialization.data(withJSONObject: object,
+                                                     options: [.prettyPrinted, .sortedKeys]),
+              let json = String(data: data, encoding: .utf8)
+        else { return line }
+        return json
+    }
+
     private func add() {
         let enabled = Dictionary(uniqueKeysWithValues: clients.map { ($0, true) })
         let requests = parsed.servers.map { params(for: $0, clients: enabled) }
@@ -579,7 +612,7 @@ struct AddServerSheet: View {
                                // What the endpoint answered to beats what the paste guessed: an
                                // SSE server behind a URL that doesn't say so is exactly the case
                                // the check exists for.
-                               transport: inspection?.transport ?? server.transport,
+                               transport: inspection?.transport ?? server.transport ?? prefill?.transport,
                                auth: kind, clients: clients,
                                headerName: credential ? trimmedHeaderName : nil,
                                headerValue: credential ? headerValue : nil)
