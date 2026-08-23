@@ -31,10 +31,11 @@ targets:
     preBuildScripts:
       - name: Build and embed mcpmd
         shell: /bin/bash
-        # Declared so the build graph knows what this produces, but the phase still runs every
-        # build: its real inputs are every file under Sources/, and `swift build` is incremental,
-        # so a no-op pass costs a fraction of a second.
-        alwaysOutOfDate: true
+        # Outputs are declared for the build graph, but dependency analysis is off so the phase
+        # runs every build: its real inputs are every file under the package's Sources/, which is
+        # not a list worth maintaining here, and `swift build` is incremental so a no-op pass
+        # costs a fraction of a second.
+        basedOnDependencyAnalysis: false
         outputFiles:
           - $(TARGET_BUILD_DIR)/$(EXECUTABLE_FOLDER_PATH)/mcpmd
         script: |
@@ -50,6 +51,24 @@ targets:
           mkdir -p "$DEST"
           cp -f "$PACKAGE/.build/$SWIFT_CONFIG/mcpmd" "$DEST/mcpmd"
           chmod +x "$DEST/mcpmd"
+    # Xcode signs the app bundle after every build phase has run, and it only signs the bundle's
+    # own executable — a nested Mach-O it did not produce stays unsigned and fails notarization.
+    postBuildScripts:
+      - name: Sign embedded mcpmd
+        shell: /bin/bash
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          [ "${CODE_SIGNING_ALLOWED:-NO}" = "YES" ] || exit 0
+          IDENTITY="${EXPANDED_CODE_SIGN_IDENTITY:-}"
+          if [ -z "$IDENTITY" ]; then
+            echo "error: no code signing identity for the embedded mcpmd" >&2
+            exit 1
+          fi
+          # A secure timestamp is what notarization checks and what a local build has no use for.
+          if [ "$CONFIGURATION" = "Release" ]; then TIMESTAMP=--timestamp; else TIMESTAMP=--timestamp=none; fi
+          codesign --force --options runtime "$TIMESTAMP" --sign "$IDENTITY" \
+            "$TARGET_BUILD_DIR/$EXECUTABLE_FOLDER_PATH/mcpmd"
     info:
       path: Sources/Info.plist
       properties:

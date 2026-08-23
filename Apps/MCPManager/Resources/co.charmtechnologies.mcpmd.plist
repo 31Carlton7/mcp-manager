@@ -11,8 +11,14 @@
 	<string>Contents/MacOS/mcpmd</string>
 	<key>RunAtLoad</key>
 	<true/>
+	<!-- Restart on a crash, but not on a clean exit: the daemon exits 0 when another instance
+	     already owns the control socket, and an unconditional KeepAlive would respawn it into
+	     the same conflict forever. -->
 	<key>KeepAlive</key>
-	<true/>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
 	<key>ProcessType</key>
 	<string>Background</string>
 	<!-- Lets Login Items show this agent under "MCP Manager" rather than as a bare label. -->

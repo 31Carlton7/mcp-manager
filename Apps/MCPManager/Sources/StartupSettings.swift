@@ -19,6 +19,9 @@ final class StartupSettings {
     private(set) var daemonStatus: SMAppService.Status
     /// The last registration failure, in the user's words rather than an `OSStatus`.
     private(set) var lastError: String?
+    /// The last restart failure. Separate from `lastError` so it can be reported next to the
+    /// button that caused it rather than under the login-item switches.
+    private(set) var serviceError: String?
 
     private let app: SMAppService
     private let agent: SMAppService
@@ -55,19 +58,25 @@ final class StartupSettings {
         SMAppService.openSystemSettingsLoginItems()
     }
 
+    /// Whether there is a registered job to restart. A daemon someone started by hand is not one:
+    /// launchd doesn't know about it, so it can't be kicked.
+    var canRestartDaemon: Bool { daemonStatus == .enabled }
+
     /// Bounces the daemon so it picks up a new binary from the bundle.
     ///
     /// Not `unregister()` + `register()`: that rewrites the login-item record, and a record the
     /// user has ever declined comes back as `.requiresApproval` rather than running. `kickstart -k`
     /// only restarts the job, which is what "restart" means here.
     func restartDaemon() async {
-        lastError = nil
-        let label = "gui/\(getuid())/\(Self.agentLabel)"
+        serviceError = nil
+        guard canRestartDaemon else {
+            serviceError = "The background service isn't registered with launchd — enable it above first."
+            return
+        }
         do {
-            let failure = try await Self.launchctl(["kickstart", "-k", label])
-            if let failure { lastError = failure }
+            serviceError = try await Self.launchctl(["kickstart", "-k", "gui/\(getuid())/\(Self.agentLabel)"])
         } catch {
-            lastError = String(describing: error)
+            serviceError = String(describing: error)
         }
         refresh()
     }
@@ -97,7 +106,8 @@ final class StartupSettings {
             process.arguments = arguments
             let err = Pipe()
             process.standardError = err
-            process.standardOutput = Pipe()
+            // A Pipe nobody reads fills and blocks the child; launchctl's stdout is of no use here.
+            process.standardOutput = FileHandle.nullDevice
             try process.run()
             let text = String(decoding: err.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
             process.waitUntilExit()

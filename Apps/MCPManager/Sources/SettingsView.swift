@@ -46,7 +46,15 @@ struct SettingsView: View {
                 HStack {
                     Spacer()
                     Button("Restart background service") { restart() }
-                        .disabled(restarting)
+                        .disabled(restarting || !startup.canRestartDaemon)
+                        .help(startup.canRestartDaemon
+                              ? "Reloads the daemon from the app bundle"
+                              : "Only a service registered with launchd can be restarted")
+                }
+                if let error = startup.serviceError {
+                    Label(error, systemImage: "exclamationmark.triangle")
+                        .font(Typography.caption)
+                        .foregroundStyle(.orange)
                 }
             }
         }

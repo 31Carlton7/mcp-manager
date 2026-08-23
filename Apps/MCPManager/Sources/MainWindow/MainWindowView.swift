@@ -1,4 +1,5 @@
 import SwiftUI
+import ServiceManagement
 import MCPMCore
 import MCPMControl
 
@@ -80,21 +81,33 @@ struct MainWindowView: View {
     // MARK: startup nudge
 
     /// The one thing a fresh install gets wrong on its own: the daemon only runs because the app
-    /// started it, so the next reboot comes up with nothing running. Shown until it is either true
-    /// or waved off.
+    /// started it, so the next reboot comes up with nothing running. Gone the moment the agent is
+    /// enabled, whether from here or from System Settings.
     private var showStartupNudge: Bool { !startup.daemonAtLogin && !dismissedStartupNudge }
+    private var needsApproval: Bool { startup.daemonStatus == .requiresApproval }
 
     @ViewBuilder private var startupNudge: some View {
         if showStartupNudge {
             HStack(spacing: Space.s) {
                 Image(systemName: "bolt.badge.clock")
                     .foregroundStyle(.yellow)
-                Text("Start the background service at login so your servers survive restarts.")
-                    .font(Typography.caption)
-                Spacer(minLength: Space.m)
-                Button("Enable") { startup.daemonAtLogin = true }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
+                // Registering again cannot clear an approval the user withheld — only they can, in
+                // System Settings — so the banner asks for that instead of a button that no-ops.
+                if needsApproval {
+                    Text("Approve MCP Manager in System Settings → Login Items")
+                        .font(Typography.caption)
+                    Spacer(minLength: Space.m)
+                    Button("Open Login Items") { startup.openLoginItemsSettings() }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                } else {
+                    Text("Start the background service at login so your servers survive restarts.")
+                        .font(Typography.caption)
+                    Spacer(minLength: Space.m)
+                    Button("Enable") { startup.daemonAtLogin = true }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                }
                 Button("Not now") { dismissedStartupNudge = true }
                     .buttonStyle(.plain)
                     .font(Typography.caption)

@@ -43,12 +43,16 @@ enum MCPMD {
         // stealing it. This comes before the gateway binds, so a second daemon does not report a
         // port conflict it caused itself. A stale socket file has no listener, so the connect
         // fails and `start()` removes the file.
+        //
+        // Exit 0, not 1: the LaunchAgent's KeepAlive only restarts on a failure, and losing this
+        // race is an ordinary outcome rather than a failure. A non-zero exit would have launchd
+        // respawn us into the same conflict for as long as the other daemon lives.
         if FileManager.default.fileExists(atPath: paths.socket.path) {
             let probe = ControlClient(socketPath: paths.socket.path)
             if (try? await probe.connect()) != nil {
                 await probe.close()
-                log.error("another mcpmd is already listening on \(paths.socket.path, privacy: .public); exiting")
-                exit(1)
+                log.notice("another mcpmd is listening on \(paths.socket.path, privacy: .public); exiting cleanly")
+                exit(0)
             }
         }
 
