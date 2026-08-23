@@ -17,6 +17,7 @@ extension DaemonClient.Health {
 /// the badge is what reliably carries a warning or an error into the menu bar.
 struct MenuBarLabel: View {
     @Environment(DaemonClient.self) private var daemon
+    @Environment(StartupSettings.self) private var startup
     @Environment(\.openWindow) private var openWindow
 
     /// Once per launch. A user who closes the setup window has said "not now" for this run; the
@@ -33,7 +34,15 @@ struct MenuBarLabel: View {
                         .offset(x: 2, y: -1)
                 }
             }
-            .onAppear { daemon.start() }
+            .task {
+                daemon.start()
+                // A service that is registered and meant to be running, but hasn't answered by
+                // now, is usually launchd refusing to spawn a rebuilt binary. Rebinding the login
+                // item fixes that; the connect loop is still retrying and picks it up from there.
+                try? await Task.sleep(for: .seconds(6))
+                guard !Task.isCancelled, !daemon.isConnected, startup.daemonAtLogin else { return }
+                await startup.rebindDaemonIfStale()
+            }
             // This view is the only one built at launch — the popover's content isn't — so it is
             // where an unfinished setup has to be noticed. The window presents the sheet itself.
             .onChange(of: daemon.needsSetup) { _, needed in

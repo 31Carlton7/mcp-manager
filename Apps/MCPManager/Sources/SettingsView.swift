@@ -9,7 +9,9 @@ struct SettingsView: View {
     @Environment(DaemonClient.self) private var daemon
     @Environment(StartupSettings.self) private var startup
 
-    @State private var restarting = false
+    /// True while either service button is working — both talk to the same launchd job, so
+    /// neither should be pressable while the other is mid-flight.
+    @State private var busy = false
     /// The field's own value. Seeded from the daemon's saved settings and left alone after that,
     /// so a status arriving mid-edit can't retype what the user is halfway through.
     @State private var port = Settings.defaultGatewayPort
@@ -47,13 +49,23 @@ struct SettingsView: View {
                     }
                 }
                 gatewayPort
-                HStack {
-                    Spacer()
-                    Button("Restart background service") { restart() }
-                        .disabled(restarting || !startup.canRestartDaemon)
-                        .help(startup.canRestartDaemon
-                              ? "Reloads the daemon from the app bundle"
-                              : "Only a service registered with launchd can be restarted")
+                VStack(alignment: .trailing, spacing: Space.xs) {
+                    HStack {
+                        Spacer()
+                        Button("Repair registration") { repairRegistration() }
+                            .disabled(busy || !startup.canRestartDaemon)
+                            .help(startup.canRestartDaemon
+                                  ? "Re-registers the login item so launchd will spawn the daemon again"
+                                  : "Only a service registered with launchd can be repaired")
+                        Button("Restart background service") { restart() }
+                            .disabled(busy || !startup.canRestartDaemon)
+                            .help(startup.canRestartDaemon
+                                  ? "Reloads the daemon from the app bundle"
+                                  : "Only a service registered with launchd can be restarted")
+                    }
+                    Text("Use after rebuilding the app from source.")
+                        .font(Typography.caption)
+                        .foregroundStyle(.secondary)
                 }
                 if let error = startup.serviceError {
                     Label(error, systemImage: "exclamationmark.triangle")
@@ -144,10 +156,20 @@ struct SettingsView: View {
     }
 
     private func restart() {
-        restarting = true
+        busy = true
         Task {
             await startup.restartDaemon()
-            restarting = false
+            busy = false
+        }
+    }
+
+    /// The fix for a rebuilt app: launchd is still holding the old build's code requirement and
+    /// refuses to spawn the daemon, which no amount of restarting the job will change.
+    private func repairRegistration() {
+        busy = true
+        Task {
+            await startup.repairDaemonRegistration()
+            busy = false
         }
     }
 }

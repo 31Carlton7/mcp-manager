@@ -25,6 +25,10 @@ final class StartupSettings {
 
     private let app: SMAppService
     private let agent: SMAppService
+    /// Whether this launch has already rebound the agent. The automatic path gets one attempt: a
+    /// rebind that didn't help would fail the same way a second time, and re-registering a login
+    /// item is not something to retry in a loop.
+    private var reboundThisLaunch = false
 
     init() {
         let app = SMAppService.mainApp
@@ -79,6 +83,42 @@ final class StartupSettings {
             serviceError = String(describing: error)
         }
         refresh()
+    }
+
+    /// Re-registers the agent if it looks stale, once per launch.
+    ///
+    /// launchd records the daemon's code requirement when the login item is registered. A rebuilt
+    /// app is signed ad-hoc with a fresh identity, so the recorded requirement no longer matches
+    /// and the spawn is refused — while `status` still reads `.enabled`, because the record is
+    /// perfectly valid, just pointing at a binary launchd won't run. Re-registering rewrites it.
+    ///
+    /// Only for `.enabled`: re-registering a record the user has switched off in Login Items
+    /// leaves it switched off, and would spend the one attempt on a state a rebind can't fix.
+    func rebindDaemonIfStale() async {
+        guard !reboundThisLaunch, daemonStatus == .enabled else { return }
+        await repairDaemonRegistration()
+    }
+
+    /// The same rebind, without the once-per-launch guard, for the user asking for it by hand.
+    func repairDaemonRegistration() async {
+        serviceError = nil
+        guard daemonStatus == .enabled else {
+            serviceError = "The background service isn't registered with launchd — enable it above first."
+            return
+        }
+        reboundThisLaunch = true
+        try? await agent.unregister()
+        do {
+            try agent.register()
+        } catch {
+            serviceError = Self.describe(error, registering: true)
+        }
+        refresh()
+        // Re-registering asks macOS for the login item afresh, and a user who has ever declined
+        // this one gets the record back switched off rather than running.
+        if daemonStatus == .requiresApproval {
+            serviceError = "Re-registered, but the login item needs approving in System Settings → Login Items."
+        }
     }
 
     private func set(_ enabled: Bool, on service: SMAppService,

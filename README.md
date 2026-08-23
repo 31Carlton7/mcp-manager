@@ -118,6 +118,13 @@ not sure what it will do:
 HOME=$(mktemp -d) MCPM_TOKEN_STORE=file MCPM_GATEWAY_PORT=7447 .build/debug/mcpmd
 ```
 
+Rebuilding the app changes its code signature, and launchd holds the code requirement it recorded
+when the login item was registered — so after a dev (ad-hoc signed) build it refuses to spawn the
+bundled daemon (`spawn failed`, "needs LWCR update") even though the service still reports as
+enabled. Re-registering the login item rewrites the requirement. The app does this itself when the
+service is unreachable a few seconds after launch, or you can trigger it from Settings → Repair
+registration. Signed release builds keep a stable identity and don't run into this.
+
 ## Roadmap
 
 - Catalog of curated servers plus the official MCP registry, so adding one is a search rather than

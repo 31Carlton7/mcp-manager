@@ -13,7 +13,7 @@ struct MCPManagerApp: App {
         MenuBarExtra {
             MenuBarView().environment(daemon)
         } label: {
-            MenuBarLabel().environment(daemon)
+            MenuBarLabel().environment(daemon).environment(startup)
         }
         .menuBarExtraStyle(.window)
 
