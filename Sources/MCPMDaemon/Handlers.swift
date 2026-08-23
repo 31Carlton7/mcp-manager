@@ -29,15 +29,25 @@ public struct Handlers: Sendable {
     let gatewayError: String?
     let settings: SettingsService
     let probeTimeout: Duration
+    /// nil when the daemon was built without one: `catalog.search` then says so rather than
+    /// answering with an empty list that looks like "nothing matched".
+    let catalog: CatalogService?
+    /// Injected so tests can say what a URL turned out to be without dialling one.
+    let inspect: @Sendable (URL, Duration) async -> MCPMGateway.URLInspection
 
     public init(coord: SyncCoordinator, auth: AuthManager, gatewayPort: Int?, gatewayError: String? = nil,
-                settings: SettingsService, probeTimeout: Duration = .seconds(10)) {
+                settings: SettingsService, probeTimeout: Duration = .seconds(10),
+                catalog: CatalogService? = nil,
+                inspect: @escaping @Sendable (URL, Duration) async -> MCPMGateway.URLInspection
+                    = { await MCPProbe.inspect(url: $0, timeout: $1) }) {
         self.coord = coord
         self.auth = auth
         self.gatewayPort = gatewayPort
         self.gatewayError = gatewayError
         self.settings = settings
         self.probeTimeout = probeTimeout
+        self.catalog = catalog
+        self.inspect = inspect
     }
 
     public func status() async -> DaemonStatus {
@@ -85,11 +95,13 @@ public struct Handlers: Sendable {
             // Before the mutate, so a malformed header doesn't leave a server behind that the
             // caller was told wasn't added.
             let credential = try headerCredential(p)
+            let detected = try await detect(p)
             let id = try await coord.mutate { lib in
                 let id = Slug.unique(Slug.make(p.name), existing: Set(lib.servers.map(\.id)))
                 lib.servers.append(Server(id: id, name: p.name, kind: p.kind, command: p.command, args: p.args,
-                                          env: p.env, url: p.url, headers: p.headers, transport: p.transport,
-                                          auth: p.auth, clients: p.clients,
+                                          env: p.env, url: p.url, headers: p.headers,
+                                          transport: detected.transport,
+                                          auth: detected.auth, clients: p.clients,
                                           source: "manual", createdAt: .init()))
                 return id
             }
@@ -187,6 +199,14 @@ public struct Handlers: Sendable {
         case .syncPreview:
             let (plan, snapshots) = await coord.plannedChanges()
             return .syncPreview(preview(plan, against: snapshots))
+        case .catalogSearch(let p):
+            guard let catalog else { throw HandlerError.invalid("the catalog is not available") }
+            return .catalog(await catalog.search(query: p.query, limit: p.limit ?? 30))
+        case .inspectURL(let p):
+            guard let url = URL(string: p.url), url.host != nil else {
+                throw HandlerError.invalid("\"\(p.url)\" is not a URL")
+            }
+            return .inspection(convert(await inspect(url, probeTimeout)))
         case .confirmImport:
             // Recorded first: read-only mode is derived from this, and a daemon that lifted the
             // block without persisting the answer would ask again on the next start, after it had
@@ -289,6 +309,41 @@ public struct Handlers: Sendable {
             let gateway = URL(string: "http://127.0.0.1:\(port)/s/\(s.id)/mcp")!
             return await MCPProbe.remote(url: gateway, timeout: probeTimeout)
         }
+    }
+
+    /// Asks the URL what it is before it becomes a server. A page that is not an endpoint is
+    /// refused here rather than landing in every client's config to fail later, and an endpoint
+    /// that wants a sign-in arrives already set up for one.
+    ///
+    /// An unreachable URL is added as it stands: a laptop off the network, a server behind a VPN
+    /// and a typo are indistinguishable from here, and only one of them is the user's mistake.
+    private func detect(_ p: AddServerParams) async throws -> (auth: AuthKind, transport: Transport?) {
+        guard p.kind == .remote, p.autoDetectAuth, let raw = p.url, let url = URL(string: raw) else {
+            return (p.auth, p.transport)
+        }
+        let inspection = await inspect(url, probeTimeout)
+        switch inspection.verdict {
+        case .notMCP:
+            let suggestion = inspection.suggestion.map { " Did you mean \($0.absoluteString)?" } ?? ""
+            throw HandlerError.invalid("\(raw) is \(inspection.detail).\(suggestion)")
+        case .unreachable:
+            return (p.auth, p.transport)
+        case .mcpEndpoint:
+            // A caller that picked an auth kind has said something the endpoint cannot contradict:
+            // a header it wants sent, or an OAuth sign-in it means to start.
+            let auth = p.auth != .none ? p.auth : (inspection.authRequired ? inspection.authKind : .none)
+            return (auth, inspection.transport ?? p.transport)
+        }
+    }
+
+    private func convert(_ i: MCPMGateway.URLInspection) -> MCPMControl.URLInspection {
+        MCPMControl.URLInspection(verdict: i.verdict.rawValue, transport: i.transport,
+                                  authRequired: i.authRequired, authKind: i.authKind,
+                                  resourceMetadataURL: i.resourceMetadataURL,
+                                  serverName: i.serverName, serverVersion: i.serverVersion,
+                                  toolCount: i.toolCount, statusCode: i.statusCode,
+                                  contentType: i.contentType,
+                                  suggestion: i.suggestion?.absoluteString, detail: i.detail)
     }
 
     private func convert(_ r: ProbeResult) -> TestResult {

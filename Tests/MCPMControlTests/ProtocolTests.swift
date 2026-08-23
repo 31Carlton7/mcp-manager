@@ -224,3 +224,47 @@ func onboardingCommandsRoundTrip(command: ControlCommand) throws {
     #expect(round == status)
     #expect(round.importConfirmed == false)
 }
+
+@Test(arguments: [
+    ControlCommand.catalogSearch(.init(query: "posthog", limit: 10)),
+    .catalogSearch(.init(query: "")),
+    .inspectURL(.init(url: "https://mcp.posthog.com/mcp")),
+])
+func catalogAndInspectCommandsRoundTrip(command: ControlCommand) throws {
+    let data = try JSONEncoder.mcpm.encode(ControlRequest(id: 9, command: command))
+    let obj = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+    #expect(obj["method"] as! String == command.method)
+    #expect(try JSONDecoder.mcpm.decode(ControlRequest.self, from: data).command == command)
+}
+
+/// An app built before the check existed sends no `autoDetectAuth`, and gets it anyway.
+@Test func addServerParamsDefaultsAutoDetectOnForOlderApps() throws {
+    let json = #"{"name":"PostHog","kind":"remote","args":[],"env":{},"headers":{},"#
+        + #""url":"https://mcp.posthog.com/mcp","auth":"none","clients":{}}"#
+    let p = try JSONDecoder.mcpm.decode(AddServerParams.self, from: Data(json.utf8))
+    #expect(p.autoDetectAuth)
+    #expect(try JSONDecoder.mcpm.decode(AddServerParams.self, from: JSONEncoder.mcpm.encode(p)) == p)
+}
+
+@Test func catalogEntriesAndInspectionsSurviveTheWire() throws {
+    let entry = CatalogEntry(slug: "posthog", name: "PostHog", description: "Analytics",
+                             kind: .remote, url: "https://mcp.posthog.com/mcp", transport: .http,
+                             auth: .oauth, homepage: "https://posthog.com", iconDomain: "posthog.com",
+                             source: .bundled, official: true, verified: true)
+    let result = ControlResult.catalog([entry])
+    #expect(try JSONDecoder.mcpm.decode(ControlResult.self, from: JSONEncoder.mcpm.encode(result)) == result)
+
+    let inspection = ControlResult.inspection(
+        URLInspection(verdict: "notMCP", suggestion: "https://mcp.posthog.com/mcp",
+                      detail: "not an MCP endpoint"))
+    #expect(try JSONDecoder.mcpm.decode(ControlResult.self,
+                                        from: JSONEncoder.mcpm.encode(inspection)) == inspection)
+}
+
+/// A verdict this app has never heard of must not break the decode — it reads as "not one I know".
+@Test func anUnknownVerdictStillDecodes() throws {
+    let json = #"{"verdict":"quantum","authRequired":false,"authKind":"none","detail":"?"}"#
+    let inspection = try JSONDecoder.mcpm.decode(URLInspection.self, from: Data(json.utf8))
+    #expect(inspection.parsedVerdict == nil)
+    #expect(inspection.verdict == "quantum")
+}

@@ -12,15 +12,53 @@ private struct OfflineHTTP: HTTPClient {
     func send(_ req: URLRequest) async throws -> (Data, HTTPURLResponse) { throw Refused() }
 }
 
+/// The gateway's inspection, which is what `Handlers` is handed; `MCPMControl` mirrors the type
+/// under the same name for the wire, so both are in scope here.
+private typealias GatewayInspection = MCPMGateway.URLInspection
+
+/// What a URL turned out to be, without one being dialled. Records what it was asked, so a test
+/// can pin down that an inspection did or did not happen.
+private final class FakeInspector: @unchecked Sendable {
+    private let lock = NSLock()
+    private var answers: [String: GatewayInspection] = [:]
+    private var fallback: GatewayInspection
+    private(set) var asked: [String] = []
+
+    /// Unreachable by default: a test that is not about detection wants the add to behave the way
+    /// it did before there was any, and nothing about these URLs is real.
+    init(fallback: GatewayInspection = GatewayInspection(verdict: .unreachable,
+                                                         detail: "nothing answered")) {
+        self.fallback = fallback
+    }
+
+    func answer(_ url: String, with inspection: GatewayInspection) {
+        lock.withLock { answers[url] = inspection }
+    }
+
+    var askedURLs: [String] { lock.withLock { asked } }
+
+    var inspect: @Sendable (URL, Duration) async -> GatewayInspection {
+        { url, _ in
+            self.lock.withLock {
+                self.asked.append(url.absoluteString)
+                return self.answers[url.absoluteString] ?? self.fallback
+            }
+        }
+    }
+}
+
 private struct Env {
     let root: URL
     let store: FileTokenStore
     let coord: SyncCoordinator
     let settings: SettingsStore
     let handlers: Handlers
+    let inspector: FakeInspector
 }
 
-private func makeEnv(runningPort: Int = 7337, initial: Settings = Settings()) async throws -> Env {
+private func makeEnv(runningPort: Int = 7337, initial: Settings = Settings(),
+                     inspector: FakeInspector = FakeInspector(),
+                     catalog: CatalogService? = nil) async throws -> Env {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent("mcpm-h-\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     let coord = SyncCoordinator(store: Store(url: root.appendingPathComponent("servers.json")),
@@ -35,7 +73,9 @@ private func makeEnv(runningPort: Int = 7337, initial: Settings = Settings()) as
     let service = SettingsService(store: settings, initial: initial, runningPort: runningPort,
                                   applyRetention: { keep in await coord.setBackupRetention(keep) })
     return Env(root: root, store: store, coord: coord, settings: settings,
-               handlers: Handlers(coord: coord, auth: auth, gatewayPort: nil, settings: service))
+               handlers: Handlers(coord: coord, auth: auth, gatewayPort: nil, settings: service,
+                                  catalog: catalog, inspect: inspector.inspect),
+               inspector: inspector)
 }
 
 private func add(_ p: AddServerParams, to handlers: Handlers) async throws {
@@ -535,4 +575,147 @@ private func preview(_ handlers: Handlers) async throws -> SyncPreview {
     #expect(migrated.importConfirmed)
     // …and the file the user has to repair is still there to repair.
     #expect(try Data(contentsOf: e.settings.url) == corrupt)
+}
+
+// MARK: - Inspecting a URL on the way in
+
+private func inspection(_ verdict: GatewayInspection.Verdict, transport: Transport? = nil,
+                        authRequired: Bool = false, authKind: AuthKind = .none,
+                        suggestion: String? = nil, detail: String = "") -> GatewayInspection {
+    GatewayInspection(verdict: verdict, transport: transport, authRequired: authRequired,
+                  authKind: authKind, suggestion: suggestion.flatMap(URL.init(string:)), detail: detail)
+}
+
+/// The bug this came from: the PostHog docs page pasted into the Add sheet, added, and dead.
+@Test func aURLThatIsNotAnEndpointIsRefusedAndTheAlternativeIsNamed() async throws {
+    let inspector = FakeInspector()
+    inspector.answer("https://posthog.com/docs/model-context-protocol",
+                     with: inspection(.notMCP, suggestion: "https://mcp.posthog.com/mcp",
+                                      detail: "not an MCP endpoint — answered HTTP 405"))
+    let e = try await makeEnv(inspector: inspector)
+
+    let params = AddServerParams(name: "PostHog", kind: .remote,
+                                 url: "https://posthog.com/docs/model-context-protocol")
+    let failure = await #expect(throws: HandlerError.self) {
+        try await e.handlers.handle(ControlRequest(id: 1, command: .addServer(params)))
+    }
+    #expect(String(describing: failure).contains("https://mcp.posthog.com/mcp"))
+    // Nothing was added, so nothing has to be cleaned up.
+    #expect(await e.coord.currentLibrary().servers.isEmpty)
+}
+
+@Test func anEndpointThatAsksForASignInIsAddedWithTheAuthKindItAsksFor() async throws {
+    let inspector = FakeInspector()
+    inspector.answer("https://mcp.posthog.com/mcp",
+                     with: inspection(.mcpEndpoint, transport: .http, authRequired: true, authKind: .oauth))
+    let e = try await makeEnv(inspector: inspector)
+
+    try await add(AddServerParams(name: "PostHog", kind: .remote, url: "https://mcp.posthog.com/mcp"),
+                  to: e.handlers)
+    let server = try #require(await e.coord.currentLibrary().server(id: "posthog"))
+    #expect(server.auth == .oauth)
+    #expect(server.transport == .http)
+    #expect(await state(of: "posthog", in: e.handlers) == "needsAuth")
+}
+
+@Test func theTransportTheEndpointActuallySpeaksIsRecorded() async throws {
+    let inspector = FakeInspector()
+    inspector.answer("https://mcp.asana.com/sse",
+                     with: inspection(.mcpEndpoint, transport: .sse, authRequired: true, authKind: .oauth))
+    let e = try await makeEnv(inspector: inspector)
+
+    try await add(AddServerParams(name: "Asana", kind: .remote, url: "https://mcp.asana.com/sse"),
+                  to: e.handlers)
+    #expect(await e.coord.currentLibrary().server(id: "asana")?.transport == .sse)
+}
+
+/// A pasted `Authorization` header is a decision the endpoint does not get to overrule: it may
+/// well advertise OAuth and still accept the token the user already has.
+@Test func anAuthKindTheCallerChoseIsNotOverwritten() async throws {
+    let inspector = FakeInspector()
+    inspector.answer("https://mcp.acme.dev/mcp",
+                     with: inspection(.mcpEndpoint, transport: .http, authRequired: true, authKind: .oauth))
+    let e = try await makeEnv(inspector: inspector)
+
+    try await add(AddServerParams(name: "Acme", kind: .remote, url: "https://mcp.acme.dev/mcp",
+                                  auth: .header, headerName: "X-Api-Key", headerValue: "k"),
+                  to: e.handlers)
+    #expect(await e.coord.currentLibrary().server(id: "acme")?.auth == .header)
+    #expect(try e.store.header(for: "acme")?.value == "k")
+}
+
+@Test func anUnreachableURLIsAddedAnyway() async throws {
+    let inspector = FakeInspector()
+    inspector.answer("https://vpn.internal/mcp", with: inspection(.unreachable, detail: "no route"))
+    let e = try await makeEnv(inspector: inspector)
+
+    try await add(AddServerParams(name: "Internal", kind: .remote, url: "https://vpn.internal/mcp"),
+                  to: e.handlers)
+    #expect(await e.coord.currentLibrary().server(id: "internal")?.auth == AuthKind.none)
+}
+
+@Test func autoDetectCanBeTurnedOff() async throws {
+    let inspector = FakeInspector()
+    let e = try await makeEnv(inspector: inspector)
+
+    try await add(AddServerParams(name: "Acme", kind: .remote, url: "https://mcp.acme.dev/mcp",
+                                  auth: .oauth, autoDetectAuth: false), to: e.handlers)
+    #expect(inspector.askedURLs.isEmpty)
+    #expect(await e.coord.currentLibrary().server(id: "acme")?.auth == .oauth)
+}
+
+/// A stdio server has no URL to ask anything of.
+@Test func aStdioServerIsNeverInspected() async throws {
+    let inspector = FakeInspector()
+    let e = try await makeEnv(inspector: inspector)
+
+    try await add(AddServerParams(name: "Fetch", kind: .stdio, command: "uvx", args: ["mcp-server-fetch"]),
+                  to: e.handlers)
+    #expect(inspector.askedURLs.isEmpty)
+}
+
+@Test func inspectURLReportsWhatWasFound() async throws {
+    let inspector = FakeInspector()
+    inspector.answer("https://posthog.com/docs/model-context-protocol",
+                     with: inspection(.notMCP, suggestion: "https://mcp.posthog.com/mcp",
+                                      detail: "not an MCP endpoint — answered HTTP 405"))
+    let e = try await makeEnv(inspector: inspector)
+
+    let command = ControlCommand.inspectURL(.init(url: "https://posthog.com/docs/model-context-protocol"))
+    let result = try await e.handlers.handle(ControlRequest(id: 1, command: command))
+    guard case .inspection(let found) = result else { Issue.record("expected an inspection"); return }
+    #expect(found.parsedVerdict == .notMCP)
+    #expect(found.suggestion == "https://mcp.posthog.com/mcp")
+    #expect(found.detail.contains("405"))
+}
+
+@Test func somethingThatIsNotAURLIsRejectedBeforeAnythingIsDialled() async throws {
+    let e = try await makeEnv()
+    await #expect(throws: HandlerError.self) {
+        try await e.handlers.handle(ControlRequest(id: 1, command: .inspectURL(.init(url: "not a url"))))
+    }
+    #expect(e.inspector.askedURLs.isEmpty)
+}
+
+// MARK: - The catalog over the wire
+
+@Test func catalogSearchAnswersWithEntries() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("mcpm-cat-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let catalog = CatalogService(bundled: BundledCatalog.entries, http: OfflineHTTP(),
+                                 cacheURL: root.appendingPathComponent("catalog-cache.json"))
+    let e = try await makeEnv(catalog: catalog)
+
+    let result = try await e.handlers.handle(
+        ControlRequest(id: 1, command: .catalogSearch(.init(query: "posthog"))))
+    guard case .catalog(let entries) = result else { Issue.record("expected a catalog"); return }
+    #expect(entries.first?.slug == "posthog")
+    #expect(entries.first?.auth == .oauth)
+}
+
+@Test func catalogSearchSaysSoWhenThereIsNoCatalog() async throws {
+    let e = try await makeEnv()
+    await #expect(throws: HandlerError.self) {
+        try await e.handlers.handle(ControlRequest(id: 1, command: .catalogSearch(.init(query: "x"))))
+    }
 }

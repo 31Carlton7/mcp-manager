@@ -54,15 +54,20 @@ public struct AddServerParams: Codable, Equatable, Sendable {
     /// into the credential store.
     public var headerName: String?
     public var headerValue: String?
+    /// Whether the daemon should ask the URL what it is before adding it: refuse a page that is
+    /// not an endpoint, and set `auth` and `transport` from what it answered. Only remote servers
+    /// have anything to detect.
+    public var autoDetectAuth: Bool
 
     public init(name: String, kind: ServerKind, command: String? = nil, args: [String] = [], env: [String: String] = [:],
                 url: String? = nil, headers: [String: String] = [:], transport: Transport? = nil,
                 auth: AuthKind = .none, clients: [ClientID: Bool] = [:],
-                headerName: String? = nil, headerValue: String? = nil) {
+                headerName: String? = nil, headerValue: String? = nil, autoDetectAuth: Bool = true) {
         self.name = name; self.kind = kind; self.command = command; self.args = args; self.env = env
         self.url = url; self.headers = headers; self.transport = transport
         self.auth = auth; self.clients = clients
         self.headerName = headerName; self.headerValue = headerValue
+        self.autoDetectAuth = autoDetectAuth
     }
 
     /// `headers`, `transport` and the header credential arrived after the first release, so they
@@ -82,6 +87,8 @@ public struct AddServerParams: Codable, Equatable, Sendable {
         clients = try c.decode([ClientID: Bool].self, forKey: .clients)
         headerName = try c.decodeIfPresent(String.self, forKey: .headerName)
         headerValue = try c.decodeIfPresent(String.self, forKey: .headerValue)
+        // An app too old to know about the check is still better served by it running.
+        autoDetectAuth = try c.decodeIfPresent(Bool.self, forKey: .autoDetectAuth) ?? true
     }
 }
 
@@ -184,6 +191,10 @@ public enum ControlCommand: Equatable, Sendable {
     case syncPreview
     /// The user has seen the preview and said yes: record it, leave read-only mode, and sync.
     case confirmImport
+    /// Curated + registry search, for the catalog tab.
+    case catalogSearch(CatalogSearchParams)
+    /// What a URL is, before anyone commits to adding it.
+    case inspectURL(InspectURLParams)
 
     public var method: String {
         switch self {
@@ -207,6 +218,8 @@ public enum ControlCommand: Equatable, Sendable {
         case .setSettings: "settings.set"
         case .syncPreview: "sync.preview"
         case .confirmImport: "sync.confirmImport"
+        case .catalogSearch: "catalog.search"
+        case .inspectURL: "servers.inspectURL"
         }
     }
 }
@@ -243,6 +256,8 @@ public struct ControlRequest: Codable, Equatable, Sendable {
         case "settings.set": command = .setSettings(try c.decode(SetSettingsParams.self, forKey: .params))
         case "sync.preview": command = .syncPreview
         case "sync.confirmImport": command = .confirmImport
+        case "catalog.search": command = .catalogSearch(try c.decode(CatalogSearchParams.self, forKey: .params))
+        case "servers.inspectURL": command = .inspectURL(try c.decode(InspectURLParams.self, forKey: .params))
         default:
             throw DecodingError.dataCorruptedError(forKey: .method, in: c, debugDescription: "unknown method \(method)")
         }
@@ -264,6 +279,8 @@ public struct ControlRequest: Codable, Equatable, Sendable {
         case .authStart(let p), .authSignOut(let p), .authForget(let p): try c.encode(p, forKey: .params)
         case .authSetHeader(let p): try c.encode(p, forKey: .params)
         case .setSettings(let p): try c.encode(p, forKey: .params)
+        case .catalogSearch(let p): try c.encode(p, forKey: .params)
+        case .inspectURL(let p): try c.encode(p, forKey: .params)
         case .status, .subscribe, .listServers, .listClients, .getSettings, .syncPreview, .confirmImport: break
         }
     }
@@ -377,6 +394,8 @@ public enum ControlResult: Codable, Equatable, Sendable {
     case testResult(TestResult)
     case settings(Settings)
     case syncPreview(SyncPreview)
+    case catalog([CatalogEntry])
+    case inspection(URLInspection)
 }
 
 public struct ControlResponse: Codable, Equatable, Sendable {

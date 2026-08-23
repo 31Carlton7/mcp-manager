@@ -21,6 +21,8 @@ public struct Paths: Sendable {
     public var backups: URL { root.appendingPathComponent("backups") }
     public var socket: URL { root.appendingPathComponent("mcpmd.sock") }
     public var settings: URL { root.appendingPathComponent("settings.json") }
+    /// A day of registry answers, so the catalog opens instantly and offline.
+    public var catalogCache: URL { root.appendingPathComponent("catalog-cache.json") }
     public func ensureRoot() throws {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true,
                                                 attributes: [.posixPermissions: 0o700])

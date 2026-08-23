@@ -106,8 +106,9 @@ enum MCPMD {
             log.error("\(gatewayError ?? "", privacy: .public)")
         }
 
+        let catalog = CatalogService(cacheURL: paths.catalogCache)
         let handlers = Handlers(coord: coord, auth: auth, gatewayPort: boundPort, gatewayError: gatewayError,
-                                settings: settingsService)
+                                settings: settingsService, catalog: catalog)
         let server = ControlServer(socketPath: paths.socket.path) { req in try await handlers.handle(req) }
 
         // Bind before syncing anything: a failure to bind then leaves no trace behind, and an app
