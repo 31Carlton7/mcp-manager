@@ -17,7 +17,7 @@ ctx.scaleBy(x: 1, y: -1)
 
 ctx.setStrokeColor(CGColor(gray: 0, alpha: 1))
 ctx.setFillColor(CGColor(gray: 0, alpha: 1))
-ctx.setLineWidth(1.6)
+ctx.setLineWidth(1.8)
 ctx.setLineCap(.round)
 ctx.setLineJoin(.round)
 
