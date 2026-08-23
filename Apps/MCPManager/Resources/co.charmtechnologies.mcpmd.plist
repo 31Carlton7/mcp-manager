@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>co.charmtechnologies.mcpmd</string>
+	<!-- Relative to the app bundle, so the agent always runs the daemon that shipped with the
+	     app the user actually has: an upgrade swaps the bundle and the next launch is the new
+	     binary, with no plist rewrite. -->
+	<key>BundleProgram</key>
+	<string>Contents/MacOS/mcpmd</string>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<!-- Lets Login Items show this agent under "MCP Manager" rather than as a bare label. -->
+	<key>AssociatedBundleIdentifiers</key>
+	<array>
+		<string>co.charmtechnologies.mcpmanager</string>
+	</array>
+</dict>
+</plist>

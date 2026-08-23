@@ -11,12 +11,45 @@ targets:
   MCPManager:
     type: application
     platform: macOS
-    sources: [Sources]
+    sources:
+      - Sources
+      # Not a resource: launchd looks for the agent's plist in Contents/Library/LaunchAgents, and
+      # `SMAppService.agent(plistName:)` only finds it there.
+      - path: Resources/co.charmtechnologies.mcpmd.plist
+        buildPhase:
+          copyFiles:
+            destination: wrapper
+            subpath: Contents/Library/LaunchAgents
     dependencies:
       - package: MCPM
         product: MCPMCore
       - package: MCPM
         product: MCPMControl
+    # The daemon ships inside the app so the LaunchAgent's BundleProgram always resolves to the
+    # binary that came with the bundle the user actually has. SwiftPM builds it — the app target
+    # can't, since an Xcode application target has one executable.
+    preBuildScripts:
+      - name: Build and embed mcpmd
+        shell: /bin/bash
+        # Declared so the build graph knows what this produces, but the phase still runs every
+        # build: its real inputs are every file under Sources/, and `swift build` is incremental,
+        # so a no-op pass costs a fraction of a second.
+        alwaysOutOfDate: true
+        outputFiles:
+          - $(TARGET_BUILD_DIR)/$(EXECUTABLE_FOLDER_PATH)/mcpmd
+        script: |
+          set -euo pipefail
+          # `swift` is not on the PATH Xcode hands a script phase.
+          SWIFT="$(xcrun --find swift)"
+          PACKAGE="$SRCROOT/../.."
+          if [ "$CONFIGURATION" = "Release" ]; then SWIFT_CONFIG=release; else SWIFT_CONFIG=debug; fi
+          # SwiftPM reads Xcode's build environment and mis-resolves its own toolchain from it.
+          env -u SDKROOT -u TOOLCHAINS -u SWIFT_EXEC -u CC -u LD -u MACOSX_DEPLOYMENT_TARGET \
+            "$SWIFT" build --package-path "$PACKAGE" --product mcpmd -c "$SWIFT_CONFIG"
+          DEST="$TARGET_BUILD_DIR/$EXECUTABLE_FOLDER_PATH"
+          mkdir -p "$DEST"
+          cp -f "$PACKAGE/.build/$SWIFT_CONFIG/mcpmd" "$DEST/mcpmd"
+          chmod +x "$DEST/mcpmd"
     info:
       path: Sources/Info.plist
       properties:

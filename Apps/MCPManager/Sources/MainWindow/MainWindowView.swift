@@ -7,6 +7,10 @@ import MCPMControl
 /// need it; everything else about a server is read straight from the daemon's status.
 struct MainWindowView: View {
     @Environment(DaemonClient.self) private var daemon
+    @Environment(StartupSettings.self) private var startup
+
+    /// Sticky per-user, not per-launch: someone who has said "not now" has answered the question.
+    @AppStorage("dismissedStartupNudge") private var dismissedStartupNudge = false
 
     @State private var selection: String?
     @State private var clientFilter: ClientID?
@@ -41,9 +45,13 @@ struct MainWindowView: View {
         VStack(spacing: 0) {
             header(count: servers.count)
             Hairline()
+            startupNudge
             content(for: servers)
             banners
         }
+        // On the container, not on the banner: a transition can only animate if the animation
+        // outlives the view being inserted or removed.
+        .animation(.snappy(duration: 0.2), value: showStartupNudge)
         .inspector(isPresented: .constant(true)) {
             InspectorView(serverID: selection, clear: { selection = nil })
                 .inspectorColumnWidth(min: 250, ideal: 280, max: 320)
@@ -63,7 +71,40 @@ struct MainWindowView: View {
         .onChange(of: daemon.status?.servers.map(\.id) ?? []) { _, ids in
             if let selection, !ids.contains(selection) { self.selection = nil }
         }
-        .onAppear { daemon.start() }
+        .onAppear {
+            daemon.start()
+            startup.refresh()
+        }
+    }
+
+    // MARK: startup nudge
+
+    /// The one thing a fresh install gets wrong on its own: the daemon only runs because the app
+    /// started it, so the next reboot comes up with nothing running. Shown until it is either true
+    /// or waved off.
+    private var showStartupNudge: Bool { !startup.daemonAtLogin && !dismissedStartupNudge }
+
+    @ViewBuilder private var startupNudge: some View {
+        if showStartupNudge {
+            HStack(spacing: Space.s) {
+                Image(systemName: "bolt.badge.clock")
+                    .foregroundStyle(.yellow)
+                Text("Start the background service at login so your servers survive restarts.")
+                    .font(Typography.caption)
+                Spacer(minLength: Space.m)
+                Button("Enable") { startup.daemonAtLogin = true }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                Button("Not now") { dismissedStartupNudge = true }
+                    .buttonStyle(.plain)
+                    .font(Typography.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, Space.l)
+            .padding(.vertical, Space.s)
+            .background(.yellow.opacity(0.08))
+            .transition(.move(edge: .top).combined(with: .opacity))
+        }
     }
 
     // MARK: header
@@ -81,6 +122,13 @@ struct MainWindowView: View {
                 Button("Add", systemImage: "plus") { showAdd = true }
                     .buttonStyle(.borderedProminent)
                     .disabled(!daemon.isConnected)
+                SettingsLink {
+                    Image(systemName: "gearshape")
+                }
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
+                .help("Settings")
+                .accessibilityLabel("Settings")
             }
         }
         // `.hiddenTitleBar` puts the content under the window controls, so the row starts below them.

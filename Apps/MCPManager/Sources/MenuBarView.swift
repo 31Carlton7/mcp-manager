@@ -272,6 +272,12 @@ struct MenuBarView: View {
                 .font(Typography.caption)
                 .foregroundStyle(.secondary)
             Spacer(minLength: Space.s)
+            // `SettingsLink` rather than a button: only it can bring the Settings scene forward
+            // from a menu bar popover in an LSUIElement app, which has no menu bar of its own.
+            SettingsLink { Text("Settings…") }
+                .font(Typography.caption)
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
             Button("Open MCP Manager ↗") { open() }
                 .font(Typography.caption)
                 .buttonStyle(.plain)
