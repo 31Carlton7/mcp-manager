@@ -11,8 +11,10 @@ public struct Server: Codable, Equatable, Sendable, Identifiable {
     public var env: [String: String]
     public var url: String?
     public var headers: [String: String]
-    /// nil means Streamable HTTP; see `Transport`. Normalized on the way in, so a stdio server and
-    /// an HTTP one are both stored as "no transport".
+    /// The transport this remote server speaks, recorded whenever we know it — including `.http`,
+    /// which is written out rather than left implicit. nil means "never recorded": a stdio server,
+    /// or a library file written before transport existed. See `SyncEngine.plan`, which backfills
+    /// the second case from whatever the clients say rather than assuming the default.
     public var transport: Transport?
     public var auth: AuthKind
     public var clients: [ClientID: Bool]
@@ -25,7 +27,7 @@ public struct Server: Codable, Equatable, Sendable, Identifiable {
                 clients: [ClientID: Bool] = [:], source: String, createdAt: Date) {
         self.id = id; self.name = name; self.kind = kind; self.command = command; self.args = args
         self.env = env; self.url = url; self.headers = headers; self.auth = auth; self.clients = clients
-        self.transport = Transport.stored(transport, kind: kind)
+        self.transport = Transport.recorded(transport, kind: kind)
         self.source = source
         // JSONEncoder.mcpm's .iso8601 strategy has whole-second resolution (no fractional
         // seconds), so normalize here to keep in-memory equality consistent with a save/load
@@ -38,7 +40,10 @@ public struct Server: Codable, Equatable, Sendable, Identifiable {
     }
 
     /// Custom decode so `headers` and `transport` default when absent, keeping older library files
-    /// (written before either existed) loadable.
+    /// (written before either existed) loadable. An absent `transport` stays nil rather than
+    /// becoming `.http`: that is the one place the distinction between "HTTP" and "not yet known"
+    /// survives, and the sync needs it to avoid rewriting an SSE server on the first run after
+    /// the upgrade.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
@@ -49,7 +54,7 @@ public struct Server: Codable, Equatable, Sendable, Identifiable {
         env = try c.decode([String: String].self, forKey: .env)
         url = try c.decodeIfPresent(String.self, forKey: .url)
         headers = try c.decodeIfPresent([String: String].self, forKey: .headers) ?? [:]
-        transport = Transport.stored(try c.decodeIfPresent(Transport.self, forKey: .transport), kind: kind)
+        transport = kind == .remote ? try c.decodeIfPresent(Transport.self, forKey: .transport) : nil
         auth = try c.decode(AuthKind.self, forKey: .auth)
         clients = try c.decode([ClientID: Bool].self, forKey: .clients)
         source = try c.decode(String.self, forKey: .source)

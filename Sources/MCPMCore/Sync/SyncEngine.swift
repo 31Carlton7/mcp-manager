@@ -37,6 +37,15 @@ public enum SyncEngine {
             for e in external.sorted(by: { $0.name < $1.name }) {
                 if let idx = match(e, in: lib, port: input.gatewayPort) {
                     seenIDs.insert(lib.servers[idx].id)
+                    // A library written before transport existed says nothing about it, and the
+                    // client's file is the only surviving record of what the server speaks. Take
+                    // it before step 3 projects the default over it, or the first sync after the
+                    // upgrade would move every SSE server to HTTP. Clients that disagree are
+                    // settled by whichever sorts first; the user can still change it afterwards,
+                    // and an explicit `.http` here is exactly that change, so it is left alone.
+                    if lib.servers[idx].kind == .remote && lib.servers[idx].transport == nil {
+                        lib.servers[idx].transport = e.transport ?? .http
+                    }
                     if lib.servers[idx].clients[client] != true {
                         lib.servers[idx].clients[client] = true
                     }

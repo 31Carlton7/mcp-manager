@@ -48,4 +48,11 @@ extension Transport {
         guard kind == .remote, transport == .sse else { return nil }
         return transport
     }
+
+    /// The canonical form for a library server, where nil is not a spelling of the default but
+    /// "never recorded". A remote server built in memory always knows its transport, so an
+    /// unstated one is HTTP; only a library file written before transport existed can be nil.
+    static func recorded(_ transport: Transport?, kind: ServerKind) -> Transport? {
+        kind == .remote ? (transport ?? .http) : nil
+    }
 }

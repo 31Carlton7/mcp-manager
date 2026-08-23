@@ -4,14 +4,20 @@ import Foundation
 
 // MARK: - Model
 
-/// A library written before transport existed has no key; that means HTTP, not "undecodable".
+/// A library written before transport existed has no key. It decodes as nil, which means "never
+/// recorded" rather than HTTP — the sync fills it in from the clients.
 @Test func serverDecodesWithoutTransportField() throws {
-    let json = """
-    {"id":"a","name":"A","kind":"remote","args":[],"env":{},"url":"https://a/mcp","auth":"none",
-    "clients":{},"source":"manual","createdAt":"2026-08-17T10:00:00Z"}
-    """
-    let s = try JSONDecoder.mcpm.decode(Server.self, from: Data(json.utf8))
+    let s = try JSONDecoder.mcpm.decode(Server.self, from: Data(legacyLibraryServerJSON().utf8))
     #expect(s.transport == nil)
+}
+
+/// The JSON a pre-transport release wrote for a remote server: every key but `transport`.
+private func legacyLibraryServerJSON(clients: [String] = []) -> String {
+    let on = clients.map { "\"\($0)\":true" }.joined(separator: ",")
+    return """
+    {"id":"a","name":"A","kind":"remote","args":[],"env":{},"url":"https://a/mcp","auth":"none",
+    "clients":{\(on)},"source":"manual","createdAt":"2026-08-17T10:00:00Z"}
+    """
 }
 
 @Test func serverRoundTripsAnSSETransport() throws {
@@ -22,15 +28,34 @@ import Foundation
     #expect(try JSONDecoder.mcpm.decode(Server.self, from: data) == s)
 }
 
-/// nil and `.http` mean the same thing, so they are stored the same way — otherwise two servers
-/// that behave identically would compare unequal and the sync would write for no reason.
-@Test func httpIsStoredAsTheAbsenceOfATransport() throws {
+/// A library server records HTTP rather than leaving it implicit, so that a missing key can go on
+/// meaning "written before transport existed" and nothing else.
+@Test func aLibraryServerRecordsHTTPExplicitly() throws {
     let s = Server(id: "a", name: "A", kind: .remote, url: "https://a/mcp", transport: .http,
                    source: "manual", createdAt: Date(timeIntervalSince1970: 0))
-    #expect(s.transport == nil)
-    #expect((try JSONSerialization.jsonObject(with: try JSONEncoder.mcpm.encode(s)) as! [String: Any])["transport"] == nil)
+    #expect(s.transport == .http)
+    #expect((try JSONSerialization.jsonObject(with: try JSONEncoder.mcpm.encode(s)) as! [String: Any])["transport"] as? String == "http")
+}
+
+/// A remote server built in memory always knows its transport; only a legacy file can be silent.
+@Test func aRemoteServerDefaultsToHTTPRatherThanToNothing() {
+    let s = Server(id: "a", name: "A", kind: .remote, url: "https://a/mcp",
+                   source: "manual", createdAt: Date(timeIntervalSince1970: 0))
+    #expect(s.transport == .http)
+    #expect(Server.imported(ExternalServer(name: "a", kind: .remote, url: "u"), id: "a", from: .cursor,
+                            now: Date(timeIntervalSince1970: 0)).transport == .http)
+}
+
+/// In a client file there is no such distinction: nil and `.http` are the same server, and two
+/// spellings of it would compare unequal and make the sync write for nothing.
+@Test func httpIsTheAbsenceOfATransportInAClientFile() {
+    #expect(ExternalServer(name: "a", kind: .remote, url: "u", transport: .http).transport == nil)
     #expect(ExternalServer(name: "a", kind: .remote, url: "u", transport: .http)
             == ExternalServer(name: "a", kind: .remote, url: "u"))
+    // ...and the projection of a recorded `.http` is that same single spelling.
+    let s = Server(id: "a", name: "A", kind: .remote, url: "https://a/mcp", transport: .http,
+                   source: "manual", createdAt: Date(timeIntervalSince1970: 0))
+    #expect(s.external(gatewayPort: 7337).transport == nil)
 }
 
 /// A transport on a stdio server is meaningless — there is no HTTP connection to make.
@@ -213,4 +238,57 @@ func claudeDesktopLeavesATransportPreferenceAsStdio(value: String) throws {
             .servers.first?.transport == .sse)
     #expect(SmartPasteParser.parse("claude mcp add --transport http acme https://acme.example.dev/mcp")
             .servers.first?.transport == nil)
+}
+
+// MARK: - Upgrading a pre-transport library
+
+/// The regression this all exists for: before transport was modelled, the library had no key for
+/// it, so the first sync after the upgrade projected the default over an SSE server and rewrote
+/// the user's client file to HTTP. A silent library must instead learn the transport from the
+/// client that still has it on record.
+@Test func aPreTransportLibraryAdoptsSSEFromClaudeCodeInsteadOfBeingRewritten() throws {
+    let s = try JSONDecoder.mcpm.decode(Server.self, from: Data(legacyLibraryServerJSON(clients: ["claude-code"]).utf8))
+    #expect(s.transport == nil)
+    let snapshot = try ClaudeCodeAdapter(configPath: URL(fileURLWithPath: "/dev/null"))
+        .parse(Data(#"{"mcpServers":{"A":{"type":"sse","url":"https://a/mcp"}}}"#.utf8))
+    let out = SyncEngine.plan(SyncInput(library: Library(servers: [s]), snapshots: [.claudeCode: snapshot],
+                                        suppressed: [], gatewayPort: 7337, now: Date(timeIntervalSince1970: 0)))
+    #expect(out.writes.isEmpty)
+    #expect(out.library.server(id: "a")?.transport == .sse)
+}
+
+/// Same for Claude Desktop, where the transport lives in the mcp-remote bridge's arguments.
+@Test func aPreTransportLibraryAdoptsSSEFromTheClaudeDesktopBridge() throws {
+    let s = try JSONDecoder.mcpm.decode(Server.self, from: Data(legacyLibraryServerJSON(clients: ["claude-desktop"]).utf8))
+    let json = """
+    {"mcpServers":{"A":{"command":"npx","args":["-y","mcp-remote","https://a/mcp","--transport","sse-only"]}}}
+    """
+    let snapshot = try ClaudeDesktopAdapter(configPath: URL(fileURLWithPath: "/dev/null")).parse(Data(json.utf8))
+    let out = SyncEngine.plan(SyncInput(library: Library(servers: [s]), snapshots: [.claudeDesktop: snapshot],
+                                        suppressed: [], gatewayPort: 7337, now: Date(timeIntervalSince1970: 0)))
+    #expect(out.writes.isEmpty)
+    #expect(out.library.server(id: "a")?.transport == .sse)
+}
+
+/// A client that says nothing means HTTP, so the backfill settles on that and stops being silent —
+/// otherwise the same guess would be made again on every sync.
+@Test func aPreTransportLibraryBackfillsHTTPFromASilentClient() throws {
+    let s = try JSONDecoder.mcpm.decode(Server.self, from: Data(legacyLibraryServerJSON(clients: ["cursor"]).utf8))
+    let out = SyncEngine.plan(SyncInput(library: Library(servers: [s]),
+                                        snapshots: [.cursor: [ExternalServer(name: "A", kind: .remote, url: "https://a/mcp")]],
+                                        suppressed: [], gatewayPort: 7337, now: Date(timeIntervalSince1970: 0)))
+    #expect(out.writes.isEmpty)
+    #expect(out.library.server(id: "a")?.transport == .http)
+}
+
+/// A recorded `.http` is not silence, it is the user having moved the server off SSE — so it wins
+/// over the client and the write goes out.
+@Test func anExplicitHTTPLibraryStillRewritesAnSSEClient() {
+    let s = Server(id: "a", name: "A", kind: .remote, url: "https://a/mcp", transport: .http,
+                   clients: [.claudeCode: true], source: "manual", createdAt: Date(timeIntervalSince1970: 0))
+    let snapshot = [ExternalServer(name: "A", kind: .remote, url: "https://a/mcp", transport: .sse)]
+    let out = SyncEngine.plan(SyncInput(library: Library(servers: [s]), snapshots: [.claudeCode: snapshot],
+                                        suppressed: [], gatewayPort: 7337, now: Date(timeIntervalSince1970: 0)))
+    #expect(out.library.server(id: "a")?.transport == .http)
+    #expect(out.writes[.claudeCode]?.first?.transport == nil)
 }
