@@ -44,7 +44,7 @@ struct ServerCard: View {
                 ServerIcon(server: status.server, size: 26)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(status.server.name)
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(Typography.rowTitle)
                         .lineLimit(1)
                         .truncationMode(.middle)
                     subline
@@ -54,12 +54,12 @@ struct ServerCard: View {
             Spacer(minLength: 0)
             chips
         }
-        .padding(Space.m)
+        .padding(Space.card)
         .frame(height: 96, alignment: .topLeading)
         .cardSurface(selected: selected, hovering: hovering)
         .scaleEffect(scale)
         .animation(.snappy(duration: 0.18), value: scale)
-        .contentShape(.rect(cornerRadius: 16, style: .continuous))
+        .contentShape(.rect(cornerRadius: Radius.card, style: .continuous))
         // A zero-distance drag rather than `onTapGesture`, because it also reports the press. The
         // chips are child buttons and so still win the click that lands on them.
         .gesture(
@@ -80,27 +80,25 @@ struct ServerCard: View {
     @ViewBuilder private var subline: some View {
         if status.authStatus == .needsAuth {
             Text("needs sign-in")
-                .font(Typography.caption)
-                .foregroundStyle(.yellow)
+                .font(Typography.rowCaption)
+                .foregroundStyle(Semantic.yellow)
                 .lineLimit(1)
         } else if status.authStatus == .error {
             Text("sign-in error")
-                .font(Typography.caption)
-                .foregroundStyle(.red)
+                .font(Typography.rowCaption)
+                .foregroundStyle(Semantic.red)
                 .lineLimit(1)
         } else {
             HStack(spacing: Space.xs) {
                 Text(status.server.subline)
-                    .font(Typography.caption)
+                    .font(Typography.rowCaption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 // Signed in and working. A dot rather than a word, because the card's job is to say
                 // which server this is and the subline already carries the sentence.
                 if status.authStatus == .connected {
-                    Circle()
-                        .fill(.green)
-                        .frame(width: 5, height: 5)
+                    StatusDot(tint: Semantic.green, size: 5, glow: false)
                         .accessibilityLabel("Signed in")
                 }
             }
@@ -119,14 +117,10 @@ struct ServerCard: View {
         return Button {
             daemon.setClient(status.server.id, client.id, !on)
         } label: {
-            Text(client.displayName)
-                .font(.system(size: 10, weight: .medium))
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-                .foregroundStyle(on ? AnyShapeStyle(Color.green) : AnyShapeStyle(.secondary))
-                .padding(.horizontal, 6)
-                .padding(.vertical, 3)
-                .background(on ? Color.green.opacity(0.18) : Color.primary.opacity(0.06), in: .capsule)
+            // The status pill of the language, one step down in size: four of these have to fit
+            // across a 220 pt card, and the dot is what carries the on/off reading anyway.
+            StatusPill(text: client.displayName, tint: on ? Semantic.green : .secondary,
+                       dot: on, compact: true)
                 .contentShape(.capsule)
         }
         .buttonStyle(.pressable)

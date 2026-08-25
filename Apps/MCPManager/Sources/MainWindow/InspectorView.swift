@@ -82,7 +82,7 @@ struct InspectorView: View {
                     .font(.system(size: 14, weight: .semibold))
                     .lineLimit(2)
                 Text(status.server.subline)
-                    .font(Typography.caption)
+                    .font(Typography.rowCaption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
                     .truncationMode(.middle)
@@ -93,17 +93,20 @@ struct InspectorView: View {
 
     private func enabledIn(_ status: ServerStatus) -> some View {
         VStack(alignment: .leading, spacing: Space.s) {
-            sectionLabel("Enabled in")
+            SectionLabel("Enabled in")
             if daemon.installedClients.isEmpty {
-                Text("No supported clients installed").font(Typography.caption).foregroundStyle(.secondary)
+                Text("No supported clients installed")
+                    .font(Typography.rowCaption)
+                    .foregroundStyle(.secondary)
             } else {
+                // The compact row: an 11 pt medium label and a mini switch trailing.
                 ForEach(daemon.installedClients) { client in
                     Toggle(client.displayName, isOn: Binding(
                         get: { daemon.isEnabled(status.server, for: client.id) },
                         set: { daemon.setClient(status.server.id, client.id, $0) }))
                         .toggleStyle(.switch)
                         .controlSize(.mini)
-                        .font(Typography.body)
+                        .font(Typography.value)
                 }
             }
         }
@@ -111,12 +114,27 @@ struct InspectorView: View {
 
     private func connection(_ status: ServerStatus) -> some View {
         VStack(alignment: .leading, spacing: Space.xs) {
-            sectionLabel("Connection")
-            Text(endpoint(status.server))
-                .font(.system(size: 11, design: .monospaced))
-                .textSelection(.enabled)
-                .lineLimit(4)
-                .fixedSize(horizontal: false, vertical: true)
+            SectionLabel("Connection")
+            detailRow(status.server.kind == .remote ? "URL" : "Command") {
+                Text(endpoint(status.server))
+                    .font(Typography.mono)
+                    .textSelection(.enabled)
+                    .lineLimit(4)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    /// The fixed label column: 52 pt, leading-aligned, with the value taking the remainder. Because
+    /// the column is absolute, nothing shifts sideways as one server is swapped for another.
+    private func detailRow(_ label: String, @ViewBuilder value: () -> some View) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: Space.s) {
+            Text(label)
+                .font(Typography.rowCaption)
+                .foregroundStyle(.secondary)
+                .frame(width: 52, alignment: .leading)
+            value()
+            Spacer(minLength: 0)
         }
     }
 
@@ -128,7 +146,7 @@ struct InspectorView: View {
     @ViewBuilder private func authSection(_ status: ServerStatus) -> some View {
         if status.server.kind == .remote {
             VStack(alignment: .leading, spacing: Space.s) {
-                sectionLabel("Auth")
+                SectionLabel("Auth")
                 stateLine(status)
                 Picker("Auth", selection: Binding(
                     get: { authSelection },
@@ -141,7 +159,7 @@ struct InspectorView: View {
                     .controlSize(.small)
                     .labelsHidden()
                 Text("Switching auth kind removes stored credentials")
-                    .font(Typography.caption)
+                    .font(Typography.rowCaption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 switch status.server.auth {
@@ -179,16 +197,9 @@ struct InspectorView: View {
 
     private func stateLine(_ status: ServerStatus) -> some View {
         let state = status.authStatus
-        return HStack(spacing: 6) {
-            Circle()
-                .fill(state.color)
-                .frame(width: 6, height: 6)
-            Text(state.label)
-                .font(Typography.caption)
-                .foregroundStyle(.secondary)
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Auth: \(state.label)")
+        return StatusPill(text: state.label, tint: state.color)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Auth: \(state.label)")
     }
 
     @ViewBuilder private func oauthControls(_ status: ServerStatus) -> some View {
@@ -215,7 +226,7 @@ struct InspectorView: View {
             }
             Spacer(minLength: 0)
         }
-        .font(Typography.body)
+        .font(Typography.field)
     }
 
     private func headerControls(_ status: ServerStatus) -> some View {
@@ -227,12 +238,12 @@ struct InspectorView: View {
             HStack {
                 Spacer(minLength: 0)
                 Button("Save") { saveHeader(status) }
-                    .font(Typography.body)
+                    .font(Typography.field)
                     .disabled(headerName.isEmpty || headerValue.isEmpty)
             }
         }
         .textFieldStyle(.roundedBorder)
-        .font(.system(size: 11, design: .monospaced))
+        .font(Typography.mono)
     }
 
     /// Says where the clients are actually being pointed, since with auth on they no longer talk to
@@ -241,13 +252,14 @@ struct InspectorView: View {
         if status.server.auth != .none {
             if let port = daemon.gatewayPort {
                 Text("Clients will be pointed at the local gateway (localhost:\(String(port))).")
-                    .font(Typography.caption)
+                    .font(Typography.rowCaption)
+                    .monospacedDigit()
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
                 Text("Gateway not running — auth unavailable")
-                    .font(Typography.caption)
-                    .foregroundStyle(.red)
+                    .font(Typography.rowCaption)
+                    .foregroundStyle(Semantic.red)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -274,16 +286,16 @@ struct InspectorView: View {
             }
             .padding(.top, Space.s)
         } label: {
-            sectionLabel("Advanced")
+            SectionLabel("Advanced")
         }
     }
 
     private func args(_ status: ServerStatus) -> some View {
         VStack(alignment: .leading, spacing: Space.xs) {
-            Text("Args").font(Typography.caption).foregroundStyle(.secondary)
+            SectionLabel("Args")
             TextField("Args", text: $argsText)
                 .textFieldStyle(.roundedBorder)
-                .font(.system(size: 11, design: .monospaced))
+                .font(Typography.mono)
                 .labelsHidden()
                 .onSubmit { commitArgs(status) }
         }
@@ -292,7 +304,7 @@ struct InspectorView: View {
     private func env(_ status: ServerStatus) -> some View {
         VStack(alignment: .leading, spacing: Space.xs) {
             HStack {
-                Text("Env").font(Typography.caption).foregroundStyle(.secondary)
+                SectionLabel("Env")
                 Spacer(minLength: 0)
                 Button { envRows.append(EnvRow(key: "", value: "")) } label: { Image(systemName: "plus") }
                     .buttonStyle(.pressable)
@@ -316,29 +328,29 @@ struct InspectorView: View {
                     .accessibilityLabel("Remove \(row.key.isEmpty ? "empty" : row.key) environment variable")
                 }
                 .textFieldStyle(.roundedBorder)
-                .font(.system(size: 11, design: .monospaced))
+                .font(Typography.mono)
             }
         }
     }
 
     private func headers(_ status: ServerStatus) -> some View {
         VStack(alignment: .leading, spacing: Space.xs) {
-            Text("Headers").font(Typography.caption).foregroundStyle(.secondary)
+            SectionLabel("Headers")
             if status.server.headers.isEmpty {
-                Text("None").font(Typography.caption).foregroundStyle(.secondary)
+                Text("None").font(Typography.rowCaption).foregroundStyle(.secondary)
             } else {
                 ForEach(status.server.headers.sorted(by: { $0.key < $1.key }), id: \.key) { key, value in
                     HStack(alignment: .top, spacing: Space.xs) {
                         Text(key).foregroundStyle(.secondary)
                         Text(value).lineLimit(1).truncationMode(.middle)
                     }
-                    .font(.system(size: 11, design: .monospaced))
+                    .font(Typography.mono)
                 }
             }
             Text(status.server.auth == .none
                  ? "Written into every client's config. A credential belongs in Auth instead."
                  : "Not written to clients while auth is on — the gateway adds its own.")
-                .font(Typography.caption)
+                .font(Typography.rowCaption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -360,7 +372,7 @@ struct InspectorView: View {
                 Button("Remove", role: .destructive) { showRemove = true }
             }
         }
-        .font(Typography.body)
+        .font(Typography.field)
         .padding(Space.m)
         .animation(.snappy(duration: 0.2), value: running)
         .confirmationDialog("Remove server?", isPresented: $showRemove) {
@@ -380,8 +392,9 @@ struct InspectorView: View {
     @ViewBuilder private func testResult(_ status: ServerStatus) -> some View {
         if let result = daemon.testResults[status.server.id] {
             Text(result.ok ? summary(result) : failure(result))
-                .font(Typography.caption)
-                .foregroundStyle(result.ok ? Color.green : Color.red)
+                .font(Typography.listValue)
+                .monospacedDigit()
+                .foregroundStyle(result.ok ? Semantic.green : Semantic.red)
                 .lineLimit(3)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
@@ -406,13 +419,6 @@ struct InspectorView: View {
     }
 
     // MARK: text
-
-    private func sectionLabel(_ text: String) -> some View {
-        Text(text.uppercased())
-            .font(Typography.label)
-            .tracking(Typography.labelTracking)
-            .foregroundStyle(.secondary)
-    }
 
     private func endpoint(_ server: Server) -> String {
         switch server.kind {

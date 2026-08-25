@@ -47,7 +47,7 @@ struct CatalogView: View {
                 .foregroundStyle(.secondary)
             TextField("Search the MCP registry", text: $query)
                 .textFieldStyle(.plain)
-                .font(Typography.body)
+                .font(Typography.field)
             if loading {
                 ProgressView().controlSize(.mini)
             } else if !query.isEmpty {
@@ -64,9 +64,8 @@ struct CatalogView: View {
 
     @ViewBuilder private var offlineNote: some View {
         if offline {
-            Label("Registry unreachable — showing the curated list", systemImage: "bolt.horizontal")
-                .font(Typography.caption)
-                .foregroundStyle(.orange)
+            NoticeBanner("Registry unreachable — showing the curated list",
+                         symbol: "bolt.horizontal", tint: Semantic.orange, limit: 1)
                 .transition(.opacity)
         }
     }
@@ -131,10 +130,13 @@ struct CatalogView: View {
                                                                 : "No server matches “\(trimmedQuery)”.")))
             }
         } else {
+            // Rows as plates rather than a grid of cards: a browsable list of installable things
+            // reads better as discrete rows, and the description gets the full width to say what
+            // the server actually is.
             ScrollView {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 10)], spacing: 10) {
+                LazyVStack(spacing: Space.m) {
                     ForEach(entries) { entry in
-                        CatalogCard(entry: entry, added: alreadyInLibrary(entry)) { add(entry) }
+                        CatalogRow(entry: entry, added: alreadyInLibrary(entry)) { add(entry) }
                     }
                 }
                 .padding(.vertical, Space.s)
@@ -171,9 +173,9 @@ struct CatalogView: View {
     private func basename(_ path: String) -> String { (path as NSString).lastPathComponent }
 }
 
-/// One catalog entry: who it is, what it is, and whether it is already in the library. The same
-/// card surface as a server card — the grid it sits in is the same grid.
-private struct CatalogCard: View {
+/// One catalog entry as a plate: a fixed icon column, who it is and what it is, and whether it is
+/// already in the library. Separated from its neighbours by the block gutter rather than by a rule.
+private struct CatalogRow: View {
     let entry: CatalogEntry
     let added: Bool
     let add: () -> Void
@@ -181,63 +183,71 @@ private struct CatalogCard: View {
     @State private var hovering = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Space.s) {
-            HStack(alignment: .top, spacing: Space.s) {
-                ServerIcon(name: entry.name, kind: entry.kind, url: entry.url,
-                           command: entry.command, args: entry.args, size: 26)
+        HStack(alignment: .top, spacing: 9) {
+            ServerIcon(name: entry.name, kind: entry.kind, url: entry.url,
+                       command: entry.command, args: entry.args, size: 22)
+            VStack(alignment: .leading, spacing: Space.xs) {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(entry.name)
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(Typography.rowTitle)
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Text(entry.description.isEmpty ? "No description" : entry.description)
-                        .font(Typography.caption)
+                        .font(Typography.rowCaption)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                Spacer(minLength: 0)
+                badges
             }
-            Spacer(minLength: 0)
-            footer
+            Spacer(minLength: Space.s)
+            action
         }
-        .padding(Space.m)
-        .frame(height: 112, alignment: .topLeading)
+        .padding(Space.card)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
         .cardSurface(hovering: hovering)
         .onHover { hovering = $0 }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(entry.name), \(sourceLabel), \(authLabel)")
     }
 
-    private var footer: some View {
+    private var badges: some View {
         HStack(spacing: Space.xs) {
-            badge(transportLabel, tint: .secondary)
-            badge(sourceLabel, tint: entry.source == .registry && entry.official
-                  ? AnyShapeStyle(Color.blue) : AnyShapeStyle(.secondary))
-            badge(authLabel, tint: entry.auth == .none
-                  ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.yellow))
-            Spacer(minLength: Space.xs)
-            if added {
-                Label("Added", systemImage: "checkmark")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.green)
-                    .labelStyle(.titleAndIcon)
-            } else {
-                Button("Add", action: add)
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-            }
+            badge(transportLabel)
+            badge(sourceLabel, tint: entry.source == .registry && entry.official ? Semantic.cyan : nil)
+            badge(authLabel, tint: entry.auth == .none ? nil : Semantic.yellow)
         }
     }
 
-    private func badge(_ text: String, tint: some ShapeStyle) -> some View {
-        Text(text)
-            .font(.system(size: 10, weight: .medium))
+    @ViewBuilder private var action: some View {
+        if added {
+            Label("Added", systemImage: "checkmark")
+                .font(Typography.listValue)
+                .foregroundStyle(Semantic.green)
+                .labelStyle(.titleAndIcon)
+        } else {
+            Button("Add", action: add)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+        }
+    }
+
+    /// Neutral by default — a low opacity of the primary colour — and hued only where the hue means
+    /// something, in which case it also takes the stroked micro-badge form.
+    private func badge(_ text: String, tint: Color? = nil) -> some View {
+        Text(text.uppercased())
+            .font(Typography.microBadge)
+            .tracking(Typography.microBadgeTracking)
             .lineLimit(1)
-            .foregroundStyle(tint)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 3)
-            .background(Color.primary.opacity(0.06), in: .capsule)
+            .foregroundStyle(tint ?? .secondary)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1.5)
+            .background((tint?.opacity(0.16) ?? Color.primary.opacity(0.08)), in: .capsule)
+            .overlay {
+                if let tint {
+                    Capsule().strokeBorder(tint.opacity(0.35), lineWidth: 0.5)
+                }
+            }
     }
 
     /// "stdio" / "remote" / "remote · sse" — the transport only shows when it isn't the default.

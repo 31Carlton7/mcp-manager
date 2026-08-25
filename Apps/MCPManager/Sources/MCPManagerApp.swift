@@ -21,8 +21,14 @@ struct MCPManagerApp: App {
         // scene closed until `openWindow(id: "main")` asks for it (verified — see Task 15 notes).
         Window("MCP Manager", id: "main") {
             MainWindowView().environment(daemon).environment(startup)
-                .frame(minWidth: 820, minHeight: 520)
-                .containerBackground(.thinMaterial, for: .window)
+                .frame(minWidth: 772, minHeight: 528)
+                // The shell: the system regular material with the base fill laid over it. The tint
+                // is the point — it stabilises contrast so the small type below does not depend on
+                // whatever wallpaper happens to be behind the window.
+                .containerBackground(for: .window) {
+                    Rectangle().fill(.regularMaterial)
+                    Rectangle().fill(Surface.base)
+                }
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 900, height: 560)

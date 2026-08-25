@@ -122,19 +122,14 @@ struct MainWindowView: View {
     /// Mac is being written to.
     @ViewBuilder private var setupBanner: some View {
         if daemon.needsSetup {
-            HStack(spacing: Space.s) {
-                Image(systemName: "hand.raised")
-                    .foregroundStyle(.orange)
-                Text("Setup not finished — your configs are untouched until you import.")
-                    .font(Typography.caption)
-                Spacer(minLength: Space.m)
+            NoticeBanner(text: "Setup not finished — your configs are untouched until you import.",
+                         symbol: "hand.raised", tint: Semantic.orange) {
                 Button("Finish setup") { showOnboarding = true }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
             }
             .padding(.horizontal, Space.l)
-            .padding(.vertical, Space.s)
-            .background(.orange.opacity(0.1))
+            .padding(.top, Space.m)
             .transition(.move(edge: .top).combined(with: .opacity))
         }
     }
@@ -153,34 +148,30 @@ struct MainWindowView: View {
 
     @ViewBuilder private var startupNudge: some View {
         if showStartupNudge {
-            HStack(spacing: Space.s) {
-                Image(systemName: "bolt.badge.clock")
-                    .foregroundStyle(.yellow)
-                // Registering again cannot clear an approval the user withheld — only they can, in
-                // System Settings — so the banner asks for that instead of a button that no-ops.
-                if needsApproval {
-                    Text("Approve MCP Manager in System Settings → Login Items")
-                        .font(Typography.caption)
-                    Spacer(minLength: Space.m)
-                    Button("Open Login Items") { startup.openLoginItemsSettings() }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                } else {
-                    Text("Start the background service at login so your servers survive restarts.")
-                        .font(Typography.caption)
-                    Spacer(minLength: Space.m)
-                    Button("Enable") { startup.daemonAtLogin = true }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
+            // Registering again cannot clear an approval the user withheld — only they can, in
+            // System Settings — so the banner asks for that instead of a button that no-ops.
+            NoticeBanner(text: needsApproval
+                         ? "Approve MCP Manager in System Settings → Login Items"
+                         : "Start the background service at login so your servers survive restarts.",
+                         symbol: "bolt.badge.clock", tint: Semantic.yellow) {
+                HStack(spacing: Space.s) {
+                    if needsApproval {
+                        Button("Open Login Items") { startup.openLoginItemsSettings() }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                    } else {
+                        Button("Enable") { startup.daemonAtLogin = true }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                    }
+                    Button("Not now") { dismissedStartupNudge = true }
+                        .buttonStyle(.plain)
+                        .font(Typography.listValue)
+                        .foregroundStyle(.secondary)
                 }
-                Button("Not now") { dismissedStartupNudge = true }
-                    .buttonStyle(.plain)
-                    .font(Typography.caption)
-                    .foregroundStyle(.secondary)
             }
             .padding(.horizontal, Space.l)
-            .padding(.vertical, Space.s)
-            .background(.yellow.opacity(0.08))
+            .padding(.top, Space.m)
             .transition(.move(edge: .top).combined(with: .opacity))
         }
     }
@@ -190,15 +181,16 @@ struct MainWindowView: View {
     private func header(count: Int) -> some View {
         GlassEffectContainer(spacing: Space.s) {
             HStack(spacing: Space.s) {
-                TextTabs(Tab.allCases, selection: $tab, title: \.rawValue)
-                    .fixedSize()
+                TabStrip(Tab.allCases, selection: $tab, title: \.rawValue)
+                    .frame(width: 180)
                 // The filters, the count and the search are all about the library; the catalog
                 // brings its own search and has nothing to filter.
                 if tab == .servers {
                     clientMenu
                     kindMenu
                     Text("\(count) \(count == 1 ? "server" : "servers")")
-                        .font(Typography.caption)
+                        .font(Typography.listValue)
+                        .monospacedDigit()
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: Space.m)
@@ -228,7 +220,7 @@ struct MainWindowView: View {
                 Button(client.displayName) { clientFilter = client.id }
             }
         } label: {
-            Text(clientLabel).font(Typography.body)
+            Text(clientLabel).font(Typography.rowTitle)
         }
         .menuStyle(.button)
         .buttonStyle(.glass)
@@ -248,7 +240,7 @@ struct MainWindowView: View {
             Button("stdio") { kindFilter = .stdio }
             Button("remote") { kindFilter = .remote }
         } label: {
-            Text(kindFilter?.rawValue ?? "All kinds").font(Typography.body)
+            Text(kindFilter?.rawValue ?? "All kinds").font(Typography.rowTitle)
         }
         .menuStyle(.button)
         .buttonStyle(.glass)
@@ -264,7 +256,7 @@ struct MainWindowView: View {
                 .foregroundStyle(.secondary)
             TextField("Search", text: $query)
                 .textFieldStyle(.plain)
-                .font(Typography.body)
+                .font(Typography.field)
                 .frame(width: 150)
             if !query.isEmpty {
                 Button { query = "" } label: { Image(systemName: "xmark.circle.fill").font(.system(size: 11)) }
@@ -335,29 +327,25 @@ struct MainWindowView: View {
 
     @ViewBuilder private var banners: some View {
         if let why = daemon.disconnectReason, daemon.status != nil {
-            banner("Background service unreachable — \(why)", color: .red)
+            banner("Background service unreachable — \(why)", tint: Semantic.red)
         }
         if let err = daemon.lastError {
-            banner(err, color: .red)
+            banner(err, tint: Semantic.red)
         }
         // The daemon's own last failure — a sync or write that went wrong with nobody watching —
         // as opposed to the command we just sent.
         if let err = daemon.status?.lastError {
-            banner("Background service: \(err)", color: .orange)
+            banner("Background service: \(err)", tint: Semantic.orange)
         }
         ForEach(daemon.installedClients.filter { !$0.healthy }) { client in
             banner("\(client.displayName) config could not be parsed — not syncing to it. \(client.error ?? "")",
-                   color: .orange)
+                   tint: Semantic.orange)
         }
     }
 
-    private func banner(_ text: String, color: Color) -> some View {
-        Label(text, systemImage: "exclamationmark.triangle")
-            .font(Typography.caption)
-            .foregroundStyle(color)
-            .lineLimit(2)
+    private func banner(_ text: String, tint: Color) -> some View {
+        NoticeBanner(text, tint: tint)
             .padding(.horizontal, Space.l)
-            .padding(.vertical, 6)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.bottom, Space.s)
     }
 }

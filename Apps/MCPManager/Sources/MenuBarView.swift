@@ -6,9 +6,9 @@ import MCPMControl
 extension DaemonClient.Health {
     var color: Color {
         switch self {
-        case .ok: .green
-        case .warning: .yellow
-        case .error: .red
+        case .ok: Semantic.green
+        case .warning: Semantic.yellow
+        case .error: Semantic.red
         }
     }
 }
@@ -66,6 +66,13 @@ struct MenuBarLabel: View {
 struct MenuBarView: View {
     private enum Tab: String, CaseIterable { case servers = "Servers", clients = "Clients" }
 
+    /// Fixed width, 12 pt of frame padding, and so a 308 pt content column. Nothing inside reflows,
+    /// which is what makes the absolute column widths below safe.
+    private static let width: CGFloat = 332
+    /// What sits above and below the scroll region — header, heroes, tabs, footer — budgeted as a
+    /// constant so the list can take everything the screen has left and no more.
+    private static let chrome: CGFloat = 240
+
     @Environment(DaemonClient.self) private var daemon
     @Environment(\.openWindow) private var openWindow
 
@@ -77,29 +84,30 @@ struct MenuBarView: View {
             header
             heroes
             setupRow
-            Hairline()
-            TextTabs(Tab.allCases, selection: $tab, title: \.rawValue)
+            TabStrip(Tab.allCases, selection: $tab, title: \.rawValue)
             list
                 .disabled(!daemon.isConnected)
                 .opacity(daemon.isConnected ? 1 : 0.5)
             errors
-            Hairline()
             footer
         }
-        .padding(Space.l)
-        .frame(width: 330)
+        .padding(Space.m)
+        .frame(width: Self.width)
         .onAppear { daemon.start() }
     }
 
     // MARK: header
 
+    /// A fixed-height band, 28 pt of content inside 4 pt of vertical padding, with a leading slot
+    /// and a trailing icon button. We leave the middle empty on purpose: the observed pattern puts
+    /// a brand mark here, and our identity is the menu bar icon.
     private var header: some View {
         GlassEffectContainer(spacing: Space.s) {
             HStack(spacing: Space.s) {
                 if let why = daemon.disconnectReason {
                     Text("Background service unreachable")
-                        .font(Typography.body)
-                        .foregroundStyle(.red)
+                        .font(Typography.rowTitle)
+                        .foregroundStyle(Semantic.red)
                         .lineLimit(1)
                         .help(why)
                 } else {
@@ -108,7 +116,9 @@ struct MenuBarView: View {
                 Spacer(minLength: Space.s)
                 settingsMenu
             }
+            .frame(height: 28)
         }
+        .padding(.vertical, Space.xs)
     }
 
     private var filterMenu: some View {
@@ -118,7 +128,7 @@ struct MenuBarView: View {
                 Button(client.displayName) { filter = client.id }
             }
         } label: {
-            Text(filterLabel).font(Typography.body)
+            Text(filterLabel).font(Typography.rowTitle)
         }
         .menuStyle(.button)
         .buttonStyle(.glass)
@@ -155,10 +165,11 @@ struct MenuBarView: View {
 
     private var heroes: some View {
         let attention = daemon.attentionCount
-        return HStack(alignment: .top, spacing: 28) {
+        return HStack(alignment: .top, spacing: Space.xl) {
             HeroNumber(title: "Active", value: daemon.activeCount(filter: filter))
             HeroNumber(title: "Clients", value: daemon.installedClients.count)
-            HeroNumber(title: "Needs attention", value: attention, tint: attention > 0 ? .yellow : .secondary)
+            HeroNumber(title: "Needs attention", value: attention,
+                       tint: attention > 0 ? Semantic.yellow : .secondary)
             Spacer(minLength: 0)
         }
         .opacity(daemon.isConnected ? 1 : 0.4)
@@ -170,22 +181,15 @@ struct MenuBarView: View {
     @ViewBuilder private var setupRow: some View {
         if daemon.needsSetup {
             Button { open() } label: {
-                HStack(spacing: Space.xs) {
-                    Image(systemName: "hand.raised")
-                    Text("Setup not finished — nothing has been imported")
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    Spacer(minLength: Space.xs)
+                NoticeBanner(text: "Setup not finished — nothing has been imported",
+                             symbol: "hand.raised", tint: Semantic.orange, limit: 2) {
                     Text("Finish setup ↗")
+                        .font(Typography.listValue)
+                        .foregroundStyle(Semantic.orange)
+                        .lineLimit(1)
                 }
-                .font(Typography.caption)
-                .padding(.horizontal, Space.s)
-                .padding(.vertical, 5)
-                .background(.orange.opacity(0.14), in: .rect(cornerRadius: 8, style: .continuous))
-                .contentShape(.rect)
             }
             .buttonStyle(.pressable)
-            .foregroundStyle(.orange)
         }
     }
 
@@ -195,7 +199,7 @@ struct MenuBarView: View {
     /// report its full height so the popover can shrink to fit it.
     @ViewBuilder private var list: some View {
         ScrollView {
-            VStack(spacing: 2) {
+            VStack(spacing: Space.xs) {
                 switch tab {
                 case .servers:
                     let servers = daemon.servers
@@ -214,24 +218,34 @@ struct MenuBarView: View {
                 }
             }
         }
-        .frame(maxHeight: 320)
+        .scrollIndicators(.automatic)
+        .frame(maxHeight: Self.listMaxHeight)
         .fixedSize(horizontal: false, vertical: true)
         .animation(.snappy(duration: 0.2), value: daemon.isConnected)
     }
 
+    /// The chrome is a constant; the list gets whatever the screen has left, and never less than
+    /// 80 pt. With one client configured the popover ends up genuinely short.
+    private static var listMaxHeight: CGFloat {
+        let available = NSScreen.main?.visibleFrame.height ?? 800
+        return max(80, available - chrome)
+    }
+
     private func empty(_ text: String) -> some View {
         Text(text)
-            .font(Typography.body)
+            .font(Typography.rowCaption)
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, Space.s)
     }
 
+    /// Each row is its own plate, and the columns inside it are fixed: a 22 pt icon column, a
+    /// flexible name, and a trailing control that always lands in the same place.
     private func serverRow(_ st: ServerStatus) -> some View {
-        HStack(spacing: Space.s) {
-            ServerIcon(server: st.server, size: 26)
+        HStack(spacing: 9) {
+            ServerIcon(server: st.server, size: 22)
             Text(st.server.name)
-                .font(Typography.body)
+                .font(Typography.rowTitle)
                 .lineLimit(1)
                 .truncationMode(.middle)
             if st.authStatus == .needsAuth {
@@ -243,7 +257,9 @@ struct MenuBarView: View {
                 .controlSize(.mini)
                 .labelsHidden()
         }
-        .padding(.vertical, 3)
+        .padding(.horizontal, Space.card)
+        .padding(.vertical, 7)
+        .cardSurface(cornerRadius: Radius.plate)
         // The "Sign in" badge appears and disappears with the daemon's status pushes, so it fades
         // rather than popping into the middle of the row.
         .animation(.snappy(duration: 0.2), value: st.state)
@@ -256,20 +272,11 @@ struct MenuBarView: View {
         Button {
             daemon.startAuth(st.server.id)
         } label: {
-            HStack(spacing: 3) {
-                Text("Sign in")
-                if off {
-                    Text("(gateway off)").foregroundStyle(.secondary)
-                }
-            }
-            .font(.system(size: 10, weight: .medium))
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(.yellow.opacity(off ? 0.08 : 0.18), in: .capsule)
-            .contentShape(.capsule)
+            StatusPill(text: off ? "Sign in (gateway off)" : "Sign in",
+                       tint: off ? .secondary : Semantic.yellow, compact: true)
+                .contentShape(.capsule)
         }
         .buttonStyle(.pressable)
-        .foregroundStyle(off ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.yellow))
         .disabled(off)
         .accessibilityLabel(off ? "Sign in unavailable, gateway off"
                                 : "Sign in to \(st.server.name)")
@@ -290,53 +297,61 @@ struct MenuBarView: View {
 
     private func clientRow(_ client: ClientStatus) -> some View {
         let count = (daemon.status?.servers ?? []).count { daemon.isEnabled($0.server, for: client.id) }
-        return HStack(spacing: Space.s) {
-            Circle()
-                .fill(client.healthy ? Color.green : Color.red)
-                .frame(width: 6, height: 6)
+        return HStack(spacing: 9) {
+            StatusDot(tint: client.healthy ? Semantic.green : Semantic.red)
+                .frame(width: 22)
                 .help(client.error ?? (client.healthy ? "Healthy" : "Unhealthy"))
-            Text(client.displayName).font(Typography.body).lineLimit(1)
-            Text("\(count) servers").font(Typography.caption).foregroundStyle(.secondary)
+            Text(client.displayName)
+                .font(Typography.rowTitle)
+                .lineLimit(1)
+            Text("\(count) servers")
+                .font(Typography.listValue)
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
             Spacer(minLength: Space.s)
             Button("Re-import") { daemon.reimport(client.id) }
-                .font(Typography.caption)
+                .font(Typography.listValue)
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
                 .help("Read \(client.configPath) back into the library")
         }
-        .padding(.vertical, 6)
+        .padding(.horizontal, Space.card)
+        .padding(.vertical, 7)
+        .cardSurface(cornerRadius: Radius.plate)
     }
 
     // MARK: errors and footer
 
     @ViewBuilder private var errors: some View {
         if let err = daemon.lastError {
-            Text(err).font(Typography.caption).foregroundStyle(.red).lineLimit(3)
+            NoticeBanner(err, tint: Semantic.red, limit: 3)
         }
         // The daemon's own last failure — a sync or write that went wrong with nobody watching —
         // as opposed to the command we just sent.
         if let err = daemon.status?.lastError {
-            Text("Background service: \(err)").font(Typography.caption).foregroundStyle(.orange).lineLimit(3)
+            NoticeBanner("Background service: \(err)", tint: Semantic.orange, limit: 3)
         }
     }
 
+    /// Two quiet actions in equal halves, and never a primary one. The sync line sits above rather
+    /// than inside, so the halves stay equal.
     private var footer: some View {
-        HStack(spacing: Space.s) {
+        VStack(alignment: .leading, spacing: Space.xs) {
             Text(syncedLabel)
-                .font(Typography.caption)
+                .font(Typography.rowCaption)
+                .monospacedDigit()
                 .foregroundStyle(.secondary)
-            Spacer(minLength: Space.s)
-            // `SettingsLink` rather than a button: only it can bring the Settings scene forward
-            // from a menu bar popover in an LSUIElement app, which has no menu bar of its own.
-            SettingsLink { Text("Settings…") }
-                .font(Typography.caption)
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-            Button("Open MCP Manager ↗") { open() }
-                .font(Typography.caption)
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
+            HStack(spacing: Space.s) {
+                // `SettingsLink` rather than a button: only it can bring the Settings scene forward
+                // from a menu bar popover in an LSUIElement app, which has no menu bar of its own.
+                SettingsLink { Text("Settings…").footerAction() }
+                    .buttonStyle(.plain)
+                Button { open() } label: { Text("Open MCP Manager ↗").footerAction() }
+                    .buttonStyle(.plain)
+            }
+            .frame(height: 30)
         }
+        .padding(.top, Space.xs)
     }
 
     private var syncedLabel: String {

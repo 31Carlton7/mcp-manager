@@ -10,11 +10,13 @@ enum AuthStatus: String {
     init(_ raw: String) { self = AuthStatus(rawValue: raw) ?? .none }
 
     /// Yellow is "you can fix this", red is "something went wrong", grey is "nothing to say".
+    /// The hues come from the dual-tone palette, which is what lets them work as coloured *text* on
+    /// a light translucent card as well as as a dot on a dark one.
     var color: Color {
         switch self {
-        case .connected: .green
-        case .needsAuth, .expiring: .yellow
-        case .error: .red
+        case .connected: Semantic.green
+        case .needsAuth, .expiring: Semantic.yellow
+        case .error: Semantic.red
         case .none: .secondary
         }
     }
