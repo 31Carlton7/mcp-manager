@@ -57,7 +57,6 @@ enum Typography {
     /// The platform body size, kept for the handful of places that carry a sentence rather than a
     /// row. Everything dense lives at 10–12.
     static let body = Font.system(size: 13)
-    static let caption = Font.system(size: 11)
     /// Numeric readouts and quiet actions. Pair with `.monospacedDigit()` wherever it can change.
     static let value = Font.system(size: 11, weight: .medium)
     static let listValue = Font.system(size: 10.5, weight: .medium)

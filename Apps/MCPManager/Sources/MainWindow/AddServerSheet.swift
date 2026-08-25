@@ -103,10 +103,15 @@ struct AddServerSheet: View {
 
             // Everything above the buttons goes inert once the add is in flight or done: the
             // fields describe a server that either exists already or is being created from them.
+            // Inert, not hidden — a control that has stopped taking input still says what it holds.
             Group {
-                pasteField
-                summaryLine
-                inspectionLine
+                // The well and what was read out of it are one object, so they sit at the tight
+                // spacing rather than at the block gutter.
+                VStack(alignment: .leading, spacing: Space.xs) {
+                    pasteField
+                    summaryLine
+                    inspectionLine
+                }
 
                 Hairline()
 
@@ -128,19 +133,27 @@ struct AddServerSheet: View {
                 } else if parsed.servers.count > 1 {
                     Text("\(parsed.servers.count) servers will be added")
                         .font(Typography.body)
+                        .monospacedDigit()
                 }
 
                 LabeledContent("Enable in") { clientChips }
 
                 if single != nil {
-                    DisclosureGroup("Advanced", isExpanded: $advanced) {
+                    DisclosureGroup(isExpanded: $advanced) {
                         advancedFields
                             .padding(.top, Space.s)
+                            // The observed indent for a nested option group: the disclosed contents
+                            // sit under the label rather than beside the rest of the form.
+                            .padding(.leading, 19)
+                    } label: {
+                        Text("Advanced")
+                            .font(.system(size: 11.5, weight: .semibold))
+                            .foregroundStyle(.secondary)
                     }
-                    .font(Typography.body)
                 }
             }
             .disabled(adding || added != nil)
+            .opacity(adding || added != nil ? 0.35 : 1)
 
             buttons
         }
@@ -181,13 +194,13 @@ struct AddServerSheet: View {
             .background(alignment: .topLeading) { pasteMeasure }
             .animation(.snappy(duration: 0.18), value: pasteHeight)
             .padding(Space.s)
-            .cardSurface(cornerRadius: 10)
+            .controlWell()
             .overlay(alignment: .topLeading) {
                 if paste.isEmpty {
                     // TextEditor insets its own text by ~5 pt, so the placeholder matches that
                     // rather than the container padding alone.
                     Text("Paste a URL, a command, or the JSON snippet from a README…")
-                        .font(.system(size: 12, design: .monospaced))
+                        .font(pasteFont)
                         .foregroundStyle(.tertiary)
                         .padding(.horizontal, Space.s + 5)
                         .padding(.vertical, Space.s)
@@ -217,8 +230,8 @@ struct AddServerSheet: View {
     /// below don't jump the first time something is typed.
     private var summaryLine: some View {
         Text(parsed.summary.isEmpty ? " " : parsed.summary)
-            .font(Typography.caption)
-            .foregroundStyle(failedToParse ? AnyShapeStyle(Color.red) : AnyShapeStyle(.secondary))
+            .font(Typography.rowCaption)
+            .foregroundStyle(failedToParse ? AnyShapeStyle(Semantic.red) : AnyShapeStyle(.secondary))
             .lineLimit(1)
             .truncationMode(.middle)
     }
@@ -235,7 +248,7 @@ struct AddServerSheet: View {
         if checking {
             HStack(spacing: Space.xs) {
                 ProgressView().controlSize(.mini)
-                Text("Checking…").font(Typography.caption).foregroundStyle(.secondary)
+                Text("Checking…").font(Typography.rowCaption).foregroundStyle(.secondary)
             }
         } else if let error = inspectionError {
             statusLine("Couldn't check this URL (\(error))", symbol: "questionmark.circle", tint: .secondary)
@@ -247,18 +260,18 @@ struct AddServerSheet: View {
     @ViewBuilder private func verdict(_ i: URLInspection) -> some View {
         switch i.parsedVerdict {
         case .mcpEndpoint:
-            statusLine("MCP endpoint · \(authSentence(i))", symbol: "checkmark.circle", tint: .green)
+            statusLine("MCP endpoint · \(authSentence(i))", symbol: "checkmark.circle", tint: Semantic.green)
         case .notMCP:
             HStack(alignment: .firstTextBaseline, spacing: Space.xs) {
-                statusLine(notMCPSentence(i), symbol: "exclamationmark.triangle", tint: .red)
+                statusLine(notMCPSentence(i), symbol: "exclamationmark.triangle", tint: Semantic.red)
                 if let suggestion = i.suggestion {
                     Button("Use it") { paste = suggestion }
                         .buttonStyle(.pressable)
-                        .font(Typography.caption)
+                        .font(Typography.listValue)
                 }
             }
         case .unreachable:
-            statusLine("Unreachable (\(i.detail))", symbol: "bolt.horizontal", tint: .orange)
+            statusLine("Unreachable (\(i.detail))", symbol: "bolt.horizontal", tint: Semantic.orange)
         case nil:
             // A verdict this app is too old to know about. Its sentence is still readable, and
             // nothing is blocked on a word we can't interpret.
@@ -284,7 +297,7 @@ struct AddServerSheet: View {
     private func statusLine(_ text: String, symbol: String, tint: some ShapeStyle) -> some View {
         Label {
             Text(text)
-                .font(Typography.caption)
+                .font(Typography.rowCaption)
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
         } icon: {
@@ -336,11 +349,11 @@ struct AddServerSheet: View {
             ServerIcon(server: shown, size: 26)
             VStack(alignment: .leading, spacing: 1) {
                 Text(shown.name)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(Typography.rowTitle)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Text(shown.subline)
-                    .font(Typography.caption)
+                    .font(Typography.rowCaption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -363,7 +376,7 @@ struct AddServerSheet: View {
         HStack(spacing: Space.xs) {
             if daemon.installedClients.isEmpty {
                 Text("No supported clients installed")
-                    .font(Typography.caption)
+                    .font(Typography.rowCaption)
                     .foregroundStyle(.secondary)
             }
             ForEach(daemon.installedClients) { client in
@@ -378,13 +391,8 @@ struct AddServerSheet: View {
         return Button {
             if on { clients.remove(client.id) } else { clients.insert(client.id) }
         } label: {
-            Text(client.displayName)
-                .font(.system(size: 10, weight: .medium))
-                .lineLimit(1)
-                .foregroundStyle(on ? AnyShapeStyle(Color.green) : AnyShapeStyle(.secondary))
-                .padding(.horizontal, 6)
-                .padding(.vertical, 3)
-                .background(on ? Color.green.opacity(0.18) : Color.primary.opacity(0.06), in: .capsule)
+            StatusPill(text: client.displayName, tint: on ? Semantic.green : .secondary,
+                       dot: on, compact: true)
                 .contentShape(.capsule)
         }
         .buttonStyle(.pressable)
@@ -413,10 +421,10 @@ struct AddServerSheet: View {
 
     private var argsField: some View {
         VStack(alignment: .leading, spacing: Space.xs) {
-            Text("Args").font(Typography.caption).foregroundStyle(.secondary)
+            SectionLabel("Args")
             TextField("Args", text: $argsText)
                 .textFieldStyle(.roundedBorder)
-                .font(.system(size: 11, design: .monospaced))
+                .font(Typography.mono)
                 .labelsHidden()
         }
     }
@@ -425,7 +433,7 @@ struct AddServerSheet: View {
                       rows: Binding<[KeyValueRow]>) -> some View {
         VStack(alignment: .leading, spacing: Space.xs) {
             HStack {
-                Text(title).font(Typography.caption).foregroundStyle(.secondary)
+                SectionLabel(title)
                 Spacer(minLength: 0)
                 Button { rows.wrappedValue.append(KeyValueRow(key: "", value: "")) } label: {
                     Image(systemName: "plus")
@@ -435,7 +443,7 @@ struct AddServerSheet: View {
                 .accessibilityLabel("Add \(title) entry")
             }
             ForEach(rows) { $row in
-                HStack(spacing: Space.xs) {
+                HStack(spacing: Space.s) {
                     TextField(placeholder.0, text: $row.key)
                     TextField(placeholder.1, text: $row.value)
                     Button {
@@ -448,7 +456,7 @@ struct AddServerSheet: View {
                     .accessibilityLabel("Remove \(row.key.isEmpty ? "empty" : row.key) entry")
                 }
                 .textFieldStyle(.roundedBorder)
-                .font(.system(size: 11, design: .monospaced))
+                .font(Typography.mono)
             }
         }
     }
@@ -457,7 +465,7 @@ struct AddServerSheet: View {
     /// daemon rejects the combination outright.
     private var authField: some View {
         VStack(alignment: .leading, spacing: Space.xs) {
-            Text("Auth").font(Typography.caption).foregroundStyle(.secondary)
+            SectionLabel("Auth")
             // Writing through the binding is the only signal that the *user* chose this kind; the
             // inspection writes `auth` directly, and must not read its own answer back as an edit.
             Picker("Auth", selection: Binding(get: { auth }, set: { auth = $0; authEdited = true })) {
@@ -475,7 +483,7 @@ struct AddServerSheet: View {
             authCaption
         }
         .textFieldStyle(.roundedBorder)
-        .font(.system(size: 11, design: .monospaced))
+        .font(Typography.mono)
     }
 
     @ViewBuilder private var authCaption: some View {
@@ -484,12 +492,12 @@ struct AddServerSheet: View {
             EmptyView()
         case .oauth:
             Text("Added signed out — use Sign in on the server to finish.")
-                .font(Typography.caption)
+                .font(Typography.rowCaption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         case .header:
             Text("Kept in the Keychain and added by the local gateway, not written to any client.")
-                .font(Typography.caption)
+                .font(Typography.rowCaption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -499,7 +507,7 @@ struct AddServerSheet: View {
 
     @ViewBuilder private var buttons: some View {
         if let error = addError {
-            statusLine(error, symbol: "exclamationmark.triangle", tint: .red)
+            statusLine(error, symbol: "exclamationmark.triangle", tint: Semantic.red)
         }
         if let added {
             signInRow(added)
@@ -522,7 +530,7 @@ struct AddServerSheet: View {
     private func signInRow(_ added: AddedServer) -> some View {
         HStack(spacing: Space.s) {
             Text("Added \(added.name). Sign in now?")
-                .font(Typography.body)
+                .font(Typography.rowTitle)
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer(minLength: Space.m)

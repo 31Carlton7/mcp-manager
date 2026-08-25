@@ -48,11 +48,11 @@ struct OnboardingSheet: View {
             // footer are the same views throughout, so only the middle animates.
             body(for: step)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .padding(Space.xl)
+                .padding(24)
             Hairline()
             footer
         }
-        .frame(width: 540, height: 480)
+        .frame(width: 540, height: 600)
         .animation(.snappy(duration: 0.22), value: step)
         .onAppear { startup.refresh() }
         // Keyed on the connection: a sheet opened before the daemon is reachable still gets its
@@ -65,19 +65,24 @@ struct OnboardingSheet: View {
     private var header: some View {
         HStack(alignment: .firstTextBaseline, spacing: Space.m) {
             Text(step.title)
-                .font(.system(size: 17, weight: .semibold))
+                .font(.system(size: 26, weight: .bold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.78)
             Spacer(minLength: Space.m)
+            // The current step stretches into a pill rather than growing into a bigger circle, so
+            // the row of dots keeps one height.
             HStack(spacing: 5) {
                 ForEach(Step.allCases, id: \.rawValue) { dot in
-                    Circle()
+                    Capsule()
                         .fill(dot == step ? AnyShapeStyle(.primary) : AnyShapeStyle(.quaternary))
-                        .frame(width: 5, height: 5)
+                        .frame(width: dot == step ? 18 : 7, height: 7)
                 }
             }
+            .animation(.snappy(duration: 0.18), value: step)
             .accessibilityLabel("Step \(step.rawValue + 1) of \(Step.allCases.count)")
         }
-        .padding(.horizontal, Space.xl)
-        .padding(.top, Space.xl)
+        .padding(.horizontal, 24)
+        .padding(.top, 24)
         .padding(.bottom, Space.m)
     }
 
@@ -98,24 +103,25 @@ struct OnboardingSheet: View {
         VStack(alignment: .leading, spacing: Space.l) {
             Text("MCP Manager keeps one library of servers and writes it out to every client you use. "
                  + "The work happens in a small background service.")
-                .font(Typography.body)
+                .font(Typography.field)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
             VStack(alignment: .leading, spacing: Space.s) {
                 HStack(spacing: Space.s) {
                     Toggle("Start it at login", isOn: $startup.daemonAtLogin)
-                    Text("Recommended")
-                        .font(Typography.label)
-                        .tracking(Typography.labelTracking)
-                        .foregroundStyle(.green)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(.green.opacity(0.14), in: .capsule)
+                    Text("Recommended".uppercased())
+                        .font(Typography.microBadge)
+                        .tracking(Typography.microBadgeTracking)
+                        .foregroundStyle(Semantic.green)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1.5)
+                        .background(Semantic.green.opacity(0.16), in: .capsule)
+                        .overlay { Capsule().strokeBorder(Semantic.green.opacity(0.35), lineWidth: 0.5) }
                     Spacer(minLength: 0)
                 }
                 Text("Without this, your servers stop syncing the next time you restart the Mac.")
-                    .font(Typography.caption)
+                    .font(Typography.rowCaption)
                     .foregroundStyle(.secondary)
                 // Registering again cannot clear an approval the user withheld — only they can,
                 // in System Settings — so this asks for that rather than offering a button that
@@ -123,24 +129,24 @@ struct OnboardingSheet: View {
                 if startup.daemonStatus == .requiresApproval {
                     HStack(spacing: Space.s) {
                         Text("Approve MCP Manager in System Settings → Login Items")
-                            .font(Typography.caption)
-                            .foregroundStyle(.orange)
+                            .font(Typography.rowCaption)
+                            .foregroundStyle(Semantic.orange)
                         Button("Open Login Items") { startup.openLoginItemsSettings() }
                             .buttonStyle(.link)
-                            .font(Typography.caption)
+                            .font(Typography.rowCaption)
                     }
                 }
                 if let error = startup.lastError {
                     Label(error, systemImage: "exclamationmark.triangle")
-                        .font(Typography.caption)
-                        .foregroundStyle(.orange)
+                        .font(Typography.rowCaption)
+                        .foregroundStyle(Semantic.orange)
                 }
             }
-            .padding(Space.m)
-            .cardSurface(cornerRadius: 12)
+            .padding(Space.card)
+            .cardSurface()
 
             Text("You can change this later in Settings.")
-                .font(Typography.caption)
+                .font(Typography.rowCaption)
                 .foregroundStyle(.tertiary)
         }
     }
@@ -152,7 +158,7 @@ struct OnboardingSheet: View {
         case .loading:
             VStack(spacing: Space.m) {
                 ProgressView()
-                Text("Reading your clients…").font(Typography.caption).foregroundStyle(.secondary)
+                Text("Reading your clients…").font(Typography.rowCaption).foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .failed(let why):
@@ -161,7 +167,7 @@ struct OnboardingSheet: View {
         case .loaded(let p):
             VStack(alignment: .leading, spacing: Space.m) {
                 Text(foundLabel(p))
-                    .font(Typography.body)
+                    .font(Typography.field)
                     .foregroundStyle(.secondary)
                 ScrollView {
                     VStack(alignment: .leading, spacing: Space.m) {
@@ -196,32 +202,29 @@ struct OnboardingSheet: View {
 
     private func clientGroup(_ group: ClientGroup) -> some View {
         VStack(alignment: .leading, spacing: Space.xs) {
-            Text(group.name.uppercased())
-                .font(Typography.label)
-                .tracking(Typography.labelTracking)
-                .foregroundStyle(.secondary)
+            SectionLabel(group.name)
             VStack(spacing: 0) {
                 ForEach(group.servers) { server in
-                    HStack(spacing: Space.s) {
+                    HStack(spacing: 9) {
                         ServerIcon(name: server.name, kind: server.kind, size: 22)
                         Text(server.name)
-                            .font(Typography.body)
+                            .font(Typography.rowTitle)
                             .lineLimit(1)
                             .truncationMode(.middle)
                         Spacer(minLength: Space.s)
                         Text(server.kind.rawValue)
-                            .font(Typography.caption)
+                            .font(Typography.rowCaption)
                             .foregroundStyle(.tertiary)
                         Image(systemName: "checkmark")
                             .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(.green)
+                            .foregroundStyle(Semantic.green)
                     }
-                    .padding(.horizontal, Space.m)
-                    .padding(.vertical, 6)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, Space.card)
                 }
             }
             .padding(.vertical, Space.xs)
-            .cardSurface(cornerRadius: 12)
+            .cardSurface()
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(group.name), \(group.servers.count) servers, all selected")
@@ -246,15 +249,16 @@ struct OnboardingSheet: View {
             VStack(alignment: .leading, spacing: Space.s) {
                 if p.writes.isEmpty {
                     Text("No files will be modified.")
-                        .font(Typography.caption)
+                        .font(Typography.rowCaption)
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(p.writes) { write in
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(clientName(write.client)).font(Typography.caption).bold()
-                            changeLine("Added", write.adds, color: .green)
-                            changeLine("Removed", write.removes, color: .red)
-                            changeLine("Rewritten to match another client", write.changes, color: .orange)
+                            SectionLabel(clientName(write.client))
+                            changeLine("Added", write.adds, color: Semantic.green)
+                            changeLine("Removed", write.removes, color: Semantic.red)
+                            changeLine("Rewritten to match another client", write.changes,
+                                       color: Semantic.orange)
                         }
                     }
                 }
@@ -263,14 +267,18 @@ struct OnboardingSheet: View {
             .padding(.top, Space.xs)
         } label: {
             HStack(spacing: Space.xs) {
-                Text("Changes to your config files").font(Typography.caption)
+                Text("Changes to your config files")
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(.secondary)
                 Text(writeSummary(p))
-                    .font(Typography.caption)
-                    .foregroundStyle(p.writes.isEmpty ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.orange))
+                    .font(Typography.listValue)
+                    .monospacedDigit()
+                    .foregroundStyle(p.writes.isEmpty ? AnyShapeStyle(.secondary)
+                                     : AnyShapeStyle(Semantic.orange))
             }
         }
-        .padding(Space.m)
-        .cardSurface(cornerRadius: 12)
+        .padding(Space.card)
+        .cardSurface()
     }
 
     private func writeSummary(_ p: SyncPreview) -> String {
@@ -280,7 +288,7 @@ struct OnboardingSheet: View {
     @ViewBuilder private func changeLine(_ label: String, _ names: [String], color: Color) -> some View {
         if !names.isEmpty {
             Text("\(label): \(names.joined(separator: ", "))")
-                .font(Typography.caption)
+                .font(Typography.rowCaption)
                 .foregroundStyle(color)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -294,15 +302,18 @@ struct OnboardingSheet: View {
 
     private var doneStep: some View {
         VStack(alignment: .leading, spacing: Space.l) {
+            // The one 30 pt tile in the app, accent-filled because the thing it stands for is now on.
             Image(systemName: "powerplug.fill")
-                .font(.system(size: 40))
-                .foregroundStyle(.green)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 30, height: 30)
+                .background(Color.accentColor, in: .rect(cornerRadius: Radius.row, style: .continuous))
             VStack(alignment: .leading, spacing: Space.s) {
                 Text("Look for the plug in your menu bar.")
-                    .font(.system(size: 15, weight: .medium))
+                    .font(.system(size: 13, weight: .semibold))
                 Text("It turns servers on and off per client, and goes yellow when something needs "
                      + "a sign-in. MCP Manager keeps working after you close this window.")
-                    .font(Typography.body)
+                    .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }

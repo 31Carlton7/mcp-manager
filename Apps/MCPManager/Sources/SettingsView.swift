@@ -19,13 +19,13 @@ struct SettingsView: View {
     var body: some View {
         @Bindable var startup = startup
         Form {
-            Section("Startup") {
+            Section {
                 Toggle("Launch MCP Manager at login", isOn: $startup.appAtLogin)
 
                 VStack(alignment: .leading, spacing: Space.xs) {
                     Toggle("Run background service at login", isOn: $startup.daemonAtLogin)
                     Text("Keeps your MCP servers connected after a restart — recommended.")
-                        .font(Typography.caption)
+                        .font(Typography.rowCaption)
                         .foregroundStyle(.secondary)
                     if startup.daemonStatus == .requiresApproval {
                         approval
@@ -34,19 +34,17 @@ struct SettingsView: View {
 
                 if let error = startup.lastError {
                     Label(error, systemImage: "exclamationmark.triangle")
-                        .font(Typography.caption)
-                        .foregroundStyle(.orange)
+                        .font(Typography.rowCaption)
+                        .foregroundStyle(Semantic.orange)
                 }
+            } header: {
+                SectionLabel("Startup")
             }
 
-            Section("Background service") {
+            Section {
                 LabeledContent("Status") {
-                    HStack(spacing: Space.xs) {
-                        Circle()
-                            .fill(daemon.isConnected ? Color.green : Color.red)
-                            .frame(width: 6, height: 6)
-                        Text(daemon.isConnected ? "Running" : "Unreachable")
-                    }
+                    StatusPill(text: daemon.isConnected ? "Running" : "Unreachable",
+                               tint: daemon.isConnected ? Semantic.green : Semantic.red)
                 }
                 gatewayPort
                 VStack(alignment: .trailing, spacing: Space.xs) {
@@ -64,14 +62,16 @@ struct SettingsView: View {
                                   : "Only a service registered with launchd can be restarted")
                     }
                     Text("Use after rebuilding the app from source.")
-                        .font(Typography.caption)
+                        .font(Typography.rowCaption)
                         .foregroundStyle(.secondary)
                 }
                 if let error = startup.serviceError {
                     Label(error, systemImage: "exclamationmark.triangle")
-                        .font(Typography.caption)
-                        .foregroundStyle(.orange)
+                        .font(Typography.rowCaption)
+                        .foregroundStyle(Semantic.orange)
                 }
+            } header: {
+                SectionLabel("Background service")
             }
         }
         .formStyle(.grouped)
@@ -101,6 +101,7 @@ struct SettingsView: View {
         LabeledContent("Gateway port") {
             HStack(spacing: Space.s) {
                 TextField("Port", value: $port, format: .number.grouping(.never))
+                    .font(Typography.mono)
                     .labelsHidden()
                     .multilineTextAlignment(.trailing)
                     .frame(width: 72)
@@ -112,18 +113,19 @@ struct SettingsView: View {
 
         VStack(alignment: .leading, spacing: Space.xs) {
             Text(portLabel)
-                .font(Typography.caption)
+                .font(Typography.rowCaption)
+                .monospacedDigit()
                 .foregroundStyle(.secondary)
             if let error = daemon.settingsError {
                 Label(error, systemImage: "exclamationmark.triangle")
-                    .font(Typography.caption)
-                    .foregroundStyle(.orange)
+                    .font(Typography.rowCaption)
+                    .foregroundStyle(Semantic.orange)
             }
             if daemon.settingsPendingRestart {
                 Label("Saved — restart the background service to apply the new port.",
                       systemImage: "arrow.clockwise")
-                    .font(Typography.caption)
-                    .foregroundStyle(.orange)
+                    .font(Typography.rowCaption)
+                    .foregroundStyle(Semantic.orange)
             }
         }
     }
@@ -142,11 +144,11 @@ struct SettingsView: View {
     private var approval: some View {
         HStack(spacing: Space.s) {
             Text("Approve in System Settings → Login Items")
-                .font(Typography.caption)
-                .foregroundStyle(.orange)
+                .font(Typography.rowCaption)
+                .foregroundStyle(Semantic.orange)
             Button("Open Login Items") { startup.openLoginItemsSettings() }
                 .buttonStyle(.link)
-                .font(Typography.caption)
+                .font(Typography.rowCaption)
         }
     }
 
