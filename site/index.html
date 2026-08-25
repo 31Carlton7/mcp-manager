@@ -32,17 +32,14 @@
   header span { font-size: 16px; color: rgba(0, 0, 0, 0.58); }
 
   .hero { padding-top: 118px; padding-bottom: 60px; }
-  .hero-row { display: flex; align-items: flex-start; gap: 40px; justify-content: space-between; }
-  .appicons { display: flex; flex-shrink: 0; padding-top: 10px; }
-  .appicons img {
-    width: 58px; height: 58px;
+  .inline-icon {
+    width: 0.82em; height: 0.82em;
     border-radius: 22.4%;                 /* Apple icon-shape ratio */
     border: 1px solid rgba(0, 0, 0, 0.08);
     background: #fff;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-    margin-left: -10px;
+    vertical-align: -0.09em;
+    margin-right: 0.16em;
   }
-  .appicons img:first-child { margin-left: 0; }
   h1 {
     font-size: 54px;
     font-weight: 500;
@@ -73,7 +70,11 @@
 
   .media-band { padding-top: 32px; max-width: 1160px; }
   .media-band.spaced { padding-top: 110px; }
-  .media-band img { width: 100%; height: auto; display: block; border-radius: 18px; }
+  .media-band img, .media-band video {
+    width: 100%; height: auto; display: block;
+    border-radius: 18px;
+    border: 1px solid rgba(0, 0, 0, 0.06);
+  }
 
   .statement { padding-top: 120px; }
   .statement h2 {
@@ -129,9 +130,6 @@
     .statement h2 { font-size: 25px; }
     .grid { grid-template-columns: 1fr; gap: 36px; }
     .hero { padding-top: 72px; }
-    .hero-row { flex-direction: column-reverse; gap: 26px; }
-    .appicons { padding-top: 0; }
-    .appicons img { width: 46px; height: 46px; }
     .cmd code { font-size: 12.5px; }
   }
 </style>
@@ -144,14 +142,7 @@
 </header>
 
 <section class="hero rail">
-  <div class="hero-row">
-    <h1>Every MCP server, every client, one menu bar app. <span class="rest">Add a server once, toggle it on for Claude Code, Claude Desktop, Cursor or Codex, and the config files get written for you.</span></h1>
-    <div class="appicons" aria-label="Works with Claude, Cursor and Codex">
-      <img src="/assets/claude.png" alt="Claude app icon">
-      <img src="/assets/cursor.png" alt="Cursor app icon">
-      <img src="/assets/codex.png" alt="Codex app icon">
-    </div>
-  </div>
+  <h1>Every MCP server, every client, one menu bar app. <span class="rest">Add a server once, toggle it on for <img class="inline-icon" src="/assets/claude.png" alt="">Claude&nbsp;Code, <img class="inline-icon" src="/assets/claude.png" alt="">Claude&nbsp;Desktop, <img class="inline-icon" src="/assets/cursor.png" alt="">Cursor or <img class="inline-icon" src="/assets/codex.png" alt="">Codex, and the config files get written for you.</span></h1>
   <div class="buttons">
     <a class="btn primary" href="https://github.com/31Carlton7/mcp-manager/releases/latest">
       Download for macOS
@@ -172,6 +163,12 @@
   <h2>One library, four config files. <span class="rest">Add a server once and tick the clients that should have it. MCP Manager writes each client's own config file and copies it first, so a server can be on in Claude Code and off in Cursor without you editing anything by hand.</span></h2>
 </section>
 
+<div class="media-band spaced rail">
+  <video data-demo muted autoplay loop playsinline
+         src="/assets/demo-library.mp4"
+         aria-label="Toggling a server on for a client and the config file updating"></video>
+</div>
+
 <section class="rail">
   <div class="grid">
     <h3><b>One library, every client.</b> <span>Claude Code, Claude Desktop, Cursor and Codex read the files MCP Manager writes. It imports the servers you already have, backs up each file before it touches it, and changes nothing until you confirm the first import.</span></h3>
@@ -184,9 +181,21 @@
   <img data-shot src="/assets/popover.png" alt="The MCP Manager menu bar popover, with servers and their per-client state">
 </div>
 
+<div class="media-band spaced rail">
+  <video data-demo muted autoplay loop playsinline
+         src="/assets/demo-signin.mp4"
+         aria-label="Signing in to a remote MCP server once, and the state flipping to connected"></video>
+</div>
+
 <section class="statement rail">
   <h2>Credentials stay on the machine. <span class="rest">The gateway binds 127.0.0.1 and nothing else. Tokens are kept in the Keychain, never in a client's config file and never in the library. Every write is backed up first, and it is MIT licensed, so you can read all of it before you run it.</span></h2>
 </section>
+
+<div class="media-band spaced rail">
+  <video data-demo muted autoplay loop playsinline
+         src="/assets/demo-catalog.mp4"
+         aria-label="Searching the MCP registry in the catalog and adding a server"></video>
+</div>
 
 <section class="rail">
   <h2 class="label">Install</h2>
@@ -217,6 +226,10 @@
   for (const img of document.querySelectorAll('[data-shot]')) {
     const hide = () => { if (!img.naturalWidth || img.naturalWidth < 2) img.parentElement.hidden = true; };
     img.complete ? hide() : (img.onload = hide, img.onerror = hide);
+  }
+  for (const v of document.querySelectorAll('[data-demo]')) {
+    v.parentElement.hidden = true;
+    v.addEventListener('loadedmetadata', () => { if (v.videoWidth > 1) v.parentElement.hidden = false; });
   }
 </script>
 
