@@ -1,5 +1,7 @@
 # MCP Manager
 
+**[mcpmanager.space](https://mcpmanager.space)**
+
 You add an MCP server to Claude Code, then add it again in Cursor, then again in Claude Desktop,
 and by the third time the details have drifted. MCP Manager keeps one library of servers and syncs
 it into the config files those clients already read (Claude Code `~/.claude.json`, Claude Desktop,
