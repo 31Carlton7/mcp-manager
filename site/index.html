@@ -32,6 +32,17 @@
   header span { font-size: 16px; color: rgba(0, 0, 0, 0.58); }
 
   .hero { padding-top: 118px; padding-bottom: 60px; }
+  .hero-row { display: flex; align-items: flex-start; gap: 40px; justify-content: space-between; }
+  .appicons { display: flex; flex-shrink: 0; padding-top: 10px; }
+  .appicons img {
+    width: 58px; height: 58px;
+    border-radius: 22.4%;                 /* Apple icon-shape ratio */
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    background: #fff;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+    margin-left: -10px;
+  }
+  .appicons img:first-child { margin-left: 0; }
   h1 {
     font-size: 54px;
     font-weight: 500;
@@ -118,6 +129,9 @@
     .statement h2 { font-size: 25px; }
     .grid { grid-template-columns: 1fr; gap: 36px; }
     .hero { padding-top: 72px; }
+    .hero-row { flex-direction: column-reverse; gap: 26px; }
+    .appicons { padding-top: 0; }
+    .appicons img { width: 46px; height: 46px; }
     .cmd code { font-size: 12.5px; }
   }
 </style>
@@ -130,7 +144,14 @@
 </header>
 
 <section class="hero rail">
-  <h1>Every MCP server, every client, one menu bar app. <span class="rest">Add a server once, toggle it on for Claude Code, Claude Desktop, Cursor or Codex, and the config files get written for you.</span></h1>
+  <div class="hero-row">
+    <h1>Every MCP server, every client, one menu bar app. <span class="rest">Add a server once, toggle it on for Claude Code, Claude Desktop, Cursor or Codex, and the config files get written for you.</span></h1>
+    <div class="appicons" aria-label="Works with Claude, Cursor and Codex">
+      <img src="/assets/claude.png" alt="Claude app icon">
+      <img src="/assets/cursor.png" alt="Cursor app icon">
+      <img src="/assets/codex.png" alt="Codex app icon">
+    </div>
+  </div>
   <div class="buttons">
     <a class="btn primary" href="https://github.com/31Carlton7/mcp-manager/releases/latest">
       Download for macOS
