@@ -105,6 +105,17 @@ struct ServerCard: View {
         }
     }
 
+    /// Card chips answer "which clients", not "what are they called" — the short form keeps all
+    /// four legible in a 220 pt card where the full names truncate into "Clau…".
+    static func shortName(_ client: ClientStatus) -> String {
+        switch client.id {
+        case .claudeCode: "Code"
+        case .claudeDesktop: "Desktop"
+        case .cursor: "Cursor"
+        case .codex: "Codex"
+        }
+    }
+
     private var chips: some View {
         HStack(spacing: Space.xs) {
             ForEach(clients) { chip($0) }
@@ -119,7 +130,7 @@ struct ServerCard: View {
         } label: {
             // The status pill of the language, one step down in size: four of these have to fit
             // across a 220 pt card, and the dot is what carries the on/off reading anyway.
-            StatusPill(text: client.displayName, tint: on ? Semantic.green : .secondary,
+            StatusPill(text: Self.shortName(client), tint: on ? Semantic.green : .secondary,
                        dot: on, compact: true)
                 .contentShape(.capsule)
         }

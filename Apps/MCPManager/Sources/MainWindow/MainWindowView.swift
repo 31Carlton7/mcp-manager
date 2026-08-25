@@ -77,8 +77,13 @@ struct MainWindowView: View {
         .animation(.snappy(duration: 0.2), value: showStartupNudge)
         .animation(.snappy(duration: 0.2), value: daemon.needsSetup)
         .animation(.snappy(duration: 0.2), value: tab)
-        // The inspector is about a selected server, and the catalog has none to select.
-        .inspector(isPresented: .constant(tab == .servers)) {
+        // The inspector is about a selected server: no selection, no panel. Binding the
+        // presentation to the selection (rather than the tab) both returns the width to the grid
+        // and lets the system's close affordance clear the selection.
+        .inspector(isPresented: Binding(
+            get: { tab == .servers && selection != nil },
+            set: { if !$0 { selection = nil } }
+        )) {
             InspectorView(serverID: selection, clear: { selection = nil })
                 .inspectorColumnWidth(min: 250, ideal: 280, max: 320)
         }
@@ -182,16 +187,21 @@ struct MainWindowView: View {
         GlassEffectContainer(spacing: Space.s) {
             HStack(spacing: Space.s) {
                 TabStrip(Tab.allCases, selection: $tab, title: \.rawValue)
-                    .frame(width: 180)
+                    .fixedSize()
+                    .layoutPriority(2)
                 // The filters, the count and the search are all about the library; the catalog
                 // brings its own search and has nothing to filter.
                 if tab == .servers {
                     clientMenu
                     kindMenu
+                    // First thing to give way when the window narrows; the grid answers the
+                    // same question.
                     Text("\(count) \(count == 1 ? "server" : "servers")")
                         .font(Typography.listValue)
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .layoutPriority(-1)
                 }
                 Spacer(minLength: Space.m)
                 if tab == .servers { search }
@@ -257,7 +267,7 @@ struct MainWindowView: View {
             TextField("Search", text: $query)
                 .textFieldStyle(.plain)
                 .font(Typography.field)
-                .frame(width: 150)
+                .frame(minWidth: 70, idealWidth: 150, maxWidth: 150)
             if !query.isEmpty {
                 Button { query = "" } label: { Image(systemName: "xmark.circle.fill").font(.system(size: 11)) }
                     .buttonStyle(.plain)
