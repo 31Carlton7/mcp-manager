@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MCP Manager for Mac — every MCP server, every client</title>
+<meta name="description" content="One library of MCP servers for Claude Code, Claude Desktop, Cursor and Codex. Add a server once, toggle it per client, and the config files are written for you. Free and open source.">
+<meta property="og:title" content="MCP Manager for Mac — every MCP server, every client">
+<meta property="og:description" content="One library of MCP servers for Claude Code, Claude Desktop, Cursor and Codex. Free and open source.">
+<meta property="og:url" content="https://mcp-manager-mac.vercel.app/">
+<meta property="og:image" content="https://mcp-manager-mac.vercel.app/assets/grid.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/png" href="/assets/icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&family=Geist+Mono:wght@400&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: "Geist", -apple-system, "system-ui", "Helvetica Neue", Arial, sans-serif;
+    background: #fff;
+    color: rgba(0, 0, 0, 0.58);
+    font-size: 16px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  .rail { padding-left: 5.5%; padding-right: 5.5%; }
+
+  header { padding-top: 28px; display: flex; align-items: center; gap: 10px; }
+  header img { width: 26px; height: 26px; border-radius: 7px; }
+  header span { font-size: 16px; color: rgba(0, 0, 0, 0.58); }
+
+  .hero { padding-top: 118px; padding-bottom: 60px; }
+  h1 {
+    font-size: 54px;
+    font-weight: 500;
+    line-height: 1.05;
+    letter-spacing: -0.035em;
+    max-width: 13.5em;
+    color: rgba(0, 0, 0, 0.9);
+  }
+  h1 .rest { color: #b2b2b2; }
+
+  .buttons { display: flex; gap: 8px; margin-top: 44px; flex-wrap: wrap; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 7px;
+    height: 38px; padding: 0 18px;
+    background: rgba(0, 0, 0, 0.055);
+    color: rgba(0, 0, 0, 0.9);
+    font-size: 15px; font-weight: 500;
+    text-decoration: none;
+    border-radius: 999px;
+    transition: background 0.15s ease;
+  }
+  .btn:hover { background: rgba(0, 0, 0, 0.1); }
+  .btn.primary { background: #1f1f1f; color: #fff; }
+  .btn.primary:hover { background: #000; }
+  .btn svg { width: 13px; height: 13px; }
+
+  .label { padding-top: 110px; font-size: 16px; font-weight: 400; color: rgba(0, 0, 0, 0.58); }
+
+  .media-band { padding-top: 32px; max-width: 1160px; }
+  .media-band.spaced { padding-top: 110px; }
+  .media-band img { width: 100%; height: auto; display: block; border-radius: 18px; }
+
+  .statement { padding-top: 120px; }
+  .statement h2 {
+    font-size: 32px; font-weight: 500;
+    line-height: 1.25; letter-spacing: -0.02em;
+    max-width: 22em;
+    color: rgba(0, 0, 0, 0.72);
+  }
+  .statement h2 .rest { color: rgba(0, 0, 0, 0.31); }
+
+  .grid {
+    padding-top: 64px;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 56px 48px;
+    max-width: 1160px;
+  }
+  .grid h3 { font-size: 20px; font-weight: 500; line-height: 1.35; letter-spacing: -0.01em; }
+  .grid h3 b { font-weight: 500; color: rgba(0, 0, 0, 0.8); }
+  .grid h3 span { color: rgba(0, 0, 0, 0.38); }
+
+  .buttons.tight { margin-top: 24px; }
+  .cmd {
+    display: inline-flex; align-items: center; gap: 14px;
+    height: 38px; padding: 0 8px 0 18px;
+    max-width: 100%; min-width: 0;
+    background: rgba(0, 0, 0, 0.055);
+    border-radius: 999px;
+  }
+  .cmd code {
+    display: block; min-width: 0;
+    overflow-x: auto; scrollbar-width: none;
+    font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 14px; color: rgba(0, 0, 0, 0.78); white-space: nowrap;
+  }
+  .cmd code::-webkit-scrollbar { display: none; }
+  .cmd button {
+    flex: none;
+    height: 26px; padding: 0 12px; border: 0; border-radius: 999px;
+    background: rgba(0, 0, 0, 0.06); color: rgba(0, 0, 0, 0.6);
+    font-family: inherit; font-size: 13px; cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+  .cmd button:hover { background: rgba(0, 0, 0, 0.1); color: rgba(0, 0, 0, 0.9); }
+
+  footer { padding-top: 140px; padding-bottom: 72px; }
+  footer .fine { margin-top: 44px; font-size: 15px; color: rgba(0, 0, 0, 0.4); }
+  footer .fine a { color: rgba(0, 0, 0, 0.62); text-decoration: none; }
+  footer .fine a:hover { color: rgba(0, 0, 0, 0.9); }
+
+  @media (max-width: 720px) {
+    h1 { font-size: 36px; letter-spacing: -0.025em; }
+    .statement h2 { font-size: 25px; }
+    .grid { grid-template-columns: 1fr; gap: 36px; }
+    .hero { padding-top: 72px; }
+    .cmd code { font-size: 12.5px; }
+  }
+</style>
+</head>
+<body>
+
+<header class="rail">
+  <img src="/assets/icon.png" alt="">
+  <span>MCP Manager</span>
+</header>
+
+<section class="hero rail">
+  <h1>Every MCP server, every client, one menu bar app. <span class="rest">Add a server once, toggle it on for Claude Code, Claude Desktop, Cursor or Codex, and the config files get written for you.</span></h1>
+  <div class="buttons">
+    <a class="btn primary" href="https://github.com/31Carlton7/mcp-manager/releases/latest">
+      Download for macOS
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 8h9M8.5 4.5 12 8l-3.5 3.5"/></svg>
+    </a>
+    <a class="btn" href="https://github.com/31Carlton7/mcp-manager">View on GitHub</a>
+  </div>
+</section>
+
+<section class="rail">
+  <h2 class="label">What MCP Manager does</h2>
+</section>
+<div class="media-band rail">
+  <img data-shot src="/assets/grid.png" alt="The MCP Manager library: every server in one grid, with a checkbox per client">
+</div>
+
+<section class="statement rail">
+  <h2>One library, four config files. <span class="rest">Add a server once and tick the clients that should have it. MCP Manager writes each client's own config file and copies it first, so a server can be on in Claude Code and off in Cursor without you editing anything by hand.</span></h2>
+</section>
+
+<section class="rail">
+  <div class="grid">
+    <h3><b>One library, every client.</b> <span>Claude Code, Claude Desktop, Cursor and Codex read the files MCP Manager writes. It imports the servers you already have, backs up each file before it touches it, and changes nothing until you confirm the first import.</span></h3>
+    <h3><b>Sign in once to remote servers.</b> <span>Notion, PostHog, anything with OAuth. A gateway on 127.0.0.1 injects the token on the way out and refreshes it before it expires, so all four clients share one sign-in. Tokens live in the Keychain.</span></h3>
+    <h3><b>Find it, add it, test it.</b> <span>Search the official MCP registry in the app and add from the catalog, or paste any URL, command or README JSON — the endpoint is validated and the auth type detected for you. Test any server's connection before you trust it.</span></h3>
+  </div>
+</section>
+
+<div class="media-band spaced rail">
+  <img data-shot src="/assets/popover.png" alt="The MCP Manager menu bar popover, with servers and their per-client state">
+</div>
+
+<section class="statement rail">
+  <h2>Credentials stay on the machine. <span class="rest">The gateway binds 127.0.0.1 and nothing else. Tokens are kept in the Keychain, never in a client's config file and never in the library. Every write is backed up first, and it is MIT licensed, so you can read all of it before you run it.</span></h2>
+</section>
+
+<section class="rail">
+  <h2 class="label">Install</h2>
+  <div class="buttons tight">
+    <span class="cmd">
+      <code id="brew">brew install --cask 31carlton7/tap/mcp-manager</code>
+      <button onclick="copyBrew(this)">Copy</button>
+    </span>
+    <a class="btn" href="https://github.com/31Carlton7/mcp-manager">View on GitHub</a>
+  </div>
+</section>
+
+<footer class="rail">
+  <a class="btn primary" href="https://github.com/31Carlton7/mcp-manager/releases/latest">
+    Download the dmg
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 8h9M8.5 4.5 12 8l-3.5 3.5"/></svg>
+  </a>
+  <p class="fine">MCP Manager is free and <a href="https://github.com/31Carlton7/mcp-manager/blob/master/LICENSE">MIT licensed</a>, made by <a href="https://carltonaikins.com">Carlton Aikins</a> · <a href="https://github.com/31Carlton7/mcp-manager">GitHub</a> · Requires macOS 26</p>
+</footer>
+
+<script>
+  function copyBrew(btn) {
+    navigator.clipboard.writeText(document.getElementById('brew').textContent);
+    btn.textContent = 'Copied';
+    setTimeout(() => { btn.textContent = 'Copy'; }, 1600);
+  }
+  // Screenshots ship with the first release; hide the band until a real image is there.
+  for (const img of document.querySelectorAll('[data-shot]')) {
+    const hide = () => { if (!img.naturalWidth || img.naturalWidth < 2) img.parentElement.hidden = true; };
+    img.complete ? hide() : (img.onload = hide, img.onerror = hide);
+  }
+</script>
+
+</body>
+</html>
