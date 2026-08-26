@@ -33,6 +33,9 @@ struct CatalogView: View {
         // Keyed on the query, so a keystroke cancels the search the last one started and the
         // answer to a query nobody is looking at any more is never shown.
         .task(id: query) { await search() }
+        // Demo capture only: typing into the field from the scripted scene. Not installed in a
+        // normal run — see DemoCapture.swift.
+        .onAppear { if DemoCapture.isActive { DemoHooks.setCatalogQuery = { self.query = $0 } } }
         .animation(.snappy(duration: 0.2), value: offline)
     }
 

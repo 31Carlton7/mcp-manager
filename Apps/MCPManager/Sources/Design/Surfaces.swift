@@ -37,8 +37,26 @@ extension View {
     }
 
     /// Capsule glass, for the controls that float above content: header filter menus and search.
-    func pill() -> some View {
-        glassEffect(.regular, in: .capsule)
+    ///
+    /// The capture build takes the opaque form instead: `cacheDisplay` renders the view hierarchy
+    /// without the window server, and a backdrop-sampling layer has nothing to sample there, so
+    /// glass would photograph as a label floating on nothing. See DemoCapture.swift.
+    @ViewBuilder func pill() -> some View {
+        if DemoCapture.isActive {
+            controlWell(cornerRadius: 999)
+        } else {
+            glassEffect(.regular, in: .capsule)
+        }
+    }
+
+    /// The round icon button that floats above content — Settings in the window header, the menu in
+    /// the popover — with the same capture-build substitution as `pill()`.
+    @ViewBuilder func circleGlassButton() -> some View {
+        if DemoCapture.isActive {
+            buttonStyle(.bordered).buttonBorderShape(.circle)
+        } else {
+            buttonStyle(.glass).buttonBorderShape(.circle)
+        }
     }
 
     /// A footer action: half the row, minimum height 28, card fill under the shell's heavier

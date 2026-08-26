@@ -47,6 +47,9 @@ struct MenuBarLabel: View {
                 // now, is usually launchd refusing to spawn a rebuilt binary. Rebinding the login
                 // item fixes that; the connect loop is still retrying and picks it up from there.
                 try? await Task.sleep(for: .seconds(6))
+                // The capture build runs against a scratch home and must never touch the login
+                // item record, which belongs to the copy the user actually installed.
+                guard !DemoCapture.isActive else { return }
                 guard !Task.isCancelled, !daemon.isConnected, startup.daemonAtLogin else { return }
                 await startup.rebindDaemonIfStale()
             }
@@ -153,8 +156,7 @@ struct MenuBarView: View {
             Image(systemName: "gearshape")
         }
         .menuStyle(.button)
-        .buttonStyle(.glass)
-        .buttonBorderShape(.circle)
+        .circleGlassButton()
         .menuIndicator(.hidden)
         .fixedSize()
         .help("The background service keeps running after you quit")

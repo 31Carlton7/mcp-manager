@@ -117,7 +117,19 @@ struct MainWindowView: View {
         .onAppear {
             daemon.start()
             startup.refresh()
+            installDemoHooks()
         }
+    }
+
+    /// Demo capture only: the scripted scenes move the window through exactly the writes its own
+    /// tabs, cards and Add button make. Nothing is installed in a normal run.
+    private func installDemoHooks() {
+        guard DemoCapture.isActive else { return }
+        DemoHooks.showServers = { self.tab = .servers }
+        DemoHooks.showCatalog = { self.tab = .catalog }
+        DemoHooks.select = { self.selection = $0 }
+        DemoHooks.openAdd = { self.addRequest = AddRequest(entry: $0) }
+        DemoHooks.closeAdd = { self.addRequest = nil }
     }
 
     // MARK: setup banner
@@ -211,8 +223,7 @@ struct MainWindowView: View {
                 SettingsLink {
                     Image(systemName: "gearshape")
                 }
-                .buttonStyle(.glass)
-                .buttonBorderShape(.circle)
+                .circleGlassButton()
                 .help("Settings")
                 .accessibilityLabel("Settings")
             }

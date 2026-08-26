@@ -13,7 +13,9 @@ struct MCPManagerApp: App {
         MenuBarExtra {
             MenuBarView().environment(daemon)
         } label: {
+            // `demoCapture` is nothing at all unless MCPM_DEMO_CAPTURE is set; see DemoCapture.swift.
             MenuBarLabel().environment(daemon).environment(startup)
+                .demoCapture(daemon)
         }
         .menuBarExtraStyle(.window)
 
@@ -21,6 +23,7 @@ struct MCPManagerApp: App {
         // scene closed until `openWindow(id: "main")` asks for it (verified — see Task 15 notes).
         Window("MCP Manager", id: "main") {
             MainWindowView().environment(daemon).environment(startup)
+                .demoActiveControls()
                 .frame(minWidth: 640, minHeight: 480)
                 // The shell: the system regular material with the base fill laid over it. The tint
                 // is the point — it stabilises contrast so the small type below does not depend on

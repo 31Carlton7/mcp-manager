@@ -371,6 +371,22 @@ final class DaemonClient {
         return String(describing: error)
     }
 
+    // MARK: demo capture only
+
+    /// Pulls a status rather than waiting for one. The capture driver changes the credential store
+    /// from outside the daemon, which is not a change anything on that side would push.
+    func _demoRefreshStatus() async {
+        guard DemoCapture.isActive, case .status(let s)? = try? await send(.status) else { return }
+        apply(s)
+    }
+
+    /// A test result without dialling anything. `testResults` is otherwise only written by `test`,
+    /// and this is the one caller that isn't a real probe.
+    func _demoInjectTestResult(_ id: String, _ result: TestResult) {
+        guard DemoCapture.isActive else { return }
+        testResults[id] = result
+    }
+
     private func run(_ cmd: ControlCommand, keys: [(server: String, client: ClientID)] = []) {
         inFlight += 1
         commandCont.yield(Queued(command: cmd, keys: keys, reply: nil))
