@@ -256,6 +256,11 @@ struct TabStrip<Value: Hashable>: View {
                     Text(title(option))
                         .font(.system(size: 13.5, weight: .semibold))
                         .foregroundStyle(active ? Color.accentColor : Color.secondary.opacity(0.86))
+                        // The segment's own margin. `maxWidth: .infinity` is what makes the segments
+                        // equal inside a strip that has width to give — but under `fixedSize`, as in
+                        // the main window's header, infinity resolves to the label's ideal width and
+                        // the tint would end exactly where the word does.
+                        .padding(.horizontal, Space.card)
                         .frame(maxWidth: .infinity)
                         .frame(height: 30)
                         .background(active ? Surface.accentTint(colorScheme) : .clear,

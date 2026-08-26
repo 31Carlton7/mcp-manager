@@ -251,7 +251,10 @@ struct InspectorView: View {
     @ViewBuilder private func gatewayCaption(_ status: ServerStatus) -> some View {
         if status.server.auth != .none {
             if let port = daemon.gatewayPort {
-                Text("Clients will be pointed at the local gateway (localhost:\(String(port))).")
+                // demo capture only: the capture's daemon is on a scratch port so it cannot collide
+                // with the real one, but the screenshot is of what a normal install says.
+                let shown = DemoCapture.isActive ? Settings.defaultGatewayPort : port
+                Text("Clients will be pointed at the local gateway (localhost:\(String(shown))).")
                     .font(Typography.rowCaption)
                     .monospacedDigit()
                     .foregroundStyle(.secondary)

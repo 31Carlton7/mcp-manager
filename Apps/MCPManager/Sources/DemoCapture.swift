@@ -31,6 +31,17 @@ enum DemoCapture {
     /// over it. Flattening over a mid-light grey, roughly what a blurred desktop reads as, keeps the
     /// shell/card/well separation the app actually has; flattening over white would erase it.
     static let backdrop = NSColor(srgbRed: 0.855, green: 0.855, blue: 0.867, alpha: 1)
+
+    /// What a glass panel reads as over that backdrop. `cacheDisplay` cannot draw an
+    /// `NSGlassEffectView` either, so the inspector column comes back as a hole — and the mid-grey
+    /// showing through it is far darker than the panel a light desktop actually puts there. The
+    /// shell's own `base` tier over the same backdrop is the closest honest stand-in.
+    static let glass = NSColor.white.withAlphaComponent(0.68)
+
+    /// And the plate a sheet sits on, for the same reason: a sheet's background is a material as
+    /// well, so it photographs blank and its fields would float over the window it is covering.
+    /// Unlike the shell, a sheet does not sample what is behind it — in light appearance it is white.
+    static let sheetPlate = NSColor.white
 }
 
 /// The hooks the driver steers the UI with. Each one is the same write the corresponding button or
@@ -91,11 +102,15 @@ final class DemoDriver {
     private enum Failure: Error, CustomStringConvertible {
         case timedOut(String)
         case blank(String)
+        case inactive
 
         var description: String {
             switch self {
             case .timedOut(let what): "timed out waiting for \(what)"
             case .blank(let name): "\(name) came back with nothing in it"
+            case .inactive:
+                "the app never came to the front — is the screen locked? Every accent would "
+                + "photograph in the inactive grey, and the inspector never opens at all."
             }
         }
     }
@@ -119,7 +134,7 @@ final class DemoDriver {
             NSApp.activate()
             let window = try await value(of: "the main window") { Self.mainWindow() }
             try await wait(for: "the window's hooks") { DemoHooks.select != nil }
-            await prepare(window)
+            try await prepare(window)
             // Favicons arrive over the network and the first layout settles a beat after that.
             await sleep(2500)
 
@@ -203,17 +218,24 @@ final class DemoDriver {
     /// A server waiting on a sign-in becoming a signed-in one. The credential is planted in the
     /// scratch store from outside the daemon, so the app asks for a status rather than waiting for
     /// a push nothing would send.
+    ///
+    /// Notion, which the stills show signed in: the clip takes its credential away first, films the
+    /// wait, and puts it back. The test result at the end is what the live Notion server actually
+    /// answers — nothing on screen here is made up.
     private func recordSignIn(_ window: NSWindow) async {
         DemoHooks.showServers?()
-        DemoHooks.select?("posthog")
-        await sleep(1200)
+        DemoHooks.select?("notion")
+        applyTokens("tokens.signed-out.json")
+        await daemon._demoRefreshStatus()
+        await sleep(1400)
         await record("demo-signin", window) {
             await self.sleep(2400)
-            self.signInPostHog()
+            self.applyTokens("tokens.signed-in.json")
             await self.daemon._demoRefreshStatus()
             await self.sleep(3400)
-            self.daemon._demoInjectTestResult("posthog", TestResult(ok: true, serverName: "PostHog MCP",
-                                                                    toolCount: 43, durationMs: 320))
+            self.daemon._demoInjectTestResult("notion", TestResult(ok: true, serverName: "Notion MCP",
+                                                                   serverVersion: "1.2.0",
+                                                                   toolCount: 28, durationMs: 750))
             await self.sleep(3400)
         }
     }
@@ -245,16 +267,17 @@ final class DemoDriver {
         DemoHooks.setCatalogQuery?("")
     }
 
-    /// The sign-in the browser would have finished: the script stages a token file beside the live
-    /// one, and this puts it in place. The store is read on every lookup, so the daemon reports the
-    /// server as connected the next time it is asked.
-    private func signInPostHog() {
+    /// Swaps the scratch credential store for one of the versions the script staged beside it —
+    /// signing out is deleting a token and signing in is the browser handing one back, and both are
+    /// just which file is at `tokens.json`. The store is read on every lookup, so the daemon reports
+    /// the new state the next time it is asked.
+    private func applyTokens(_ staged: String) {
         let root = HomeDirectory.url.appendingPathComponent(".mcpm")
-        let staged = root.appendingPathComponent("tokens.signed-in.json")
+        let source = root.appendingPathComponent(staged)
         let live = root.appendingPathComponent("tokens.json")
-        guard FileManager.default.fileExists(atPath: staged.path) else { return }
+        guard FileManager.default.fileExists(atPath: source.path) else { return }
         try? FileManager.default.removeItem(at: live)
-        try? FileManager.default.copyItem(at: staged, to: live)
+        try? FileManager.default.copyItem(at: source, to: live)
     }
 
     // MARK: capture
@@ -319,10 +342,13 @@ final class DemoDriver {
                           y: (sheetRect.minY - baseRect.minY) * scale,
                           width: CGFloat(top.pixelsWide), height: CGFloat(top.pixelsHigh))
         return Self.draw(size: NSSize(width: base.pixelsWide, height: base.pixelsHigh)) { _ in
-            base.draw(in: NSRect(x: 0, y: 0, width: base.pixelsWide, height: base.pixelsHigh))
+            Self.over(base, in: NSRect(x: 0, y: 0, width: base.pixelsWide, height: base.pixelsHigh))
             NSColor.black.withAlphaComponent(0.10).setFill()
             NSRect(x: 0, y: 0, width: base.pixelsWide, height: base.pixelsHigh).fill(using: .sourceOver)
-            top.draw(in: rect)
+            DemoCapture.sheetPlate.setFill()
+            NSBezierPath(roundedRect: rect, xRadius: Radius.shell * scale,
+                         yRadius: Radius.shell * scale).fill()
+            Self.over(top, in: rect)
         }
     }
 
@@ -330,12 +356,16 @@ final class DemoDriver {
         guard let rep = Self.cache(view) else { return nil }
         guard flattened else { return rep }
         let scale = view.window?.backingScaleFactor ?? 2
-        let patches = Self.glassContent(in: view, scale: scale)
+        let panels = Self.glassPanels(in: view, scale: scale)
         return Self.draw(size: NSSize(width: rep.pixelsWide, height: rep.pixelsHigh)) { size in
             DemoCapture.backdrop.setFill()
             NSRect(origin: .zero, size: size).fill()
-            rep.draw(in: NSRect(origin: .zero, size: size))
-            for patch in patches { patch.rep.draw(in: patch.rect) }
+            // Before the window, not after: what a glass view leaves in the bitmap is a hole, but
+            // the footer under it is real and has to land on top of this.
+            DemoCapture.glass.setFill()
+            for panel in panels { panel.rect.fill(using: .sourceOver) }
+            Self.over(rep, in: NSRect(origin: .zero, size: size))
+            for patch in panels.flatMap(\.content) { Self.over(patch.rep, in: patch.rect) }
         }
     }
 
@@ -346,32 +376,54 @@ final class DemoDriver {
         return rep
     }
 
+    /// A glass panel, photographed in pieces: where the panel sits, and the scrolling content that
+    /// had to be photographed separately from inside it.
+    private struct GlassPanel {
+        var rect: NSRect
+        var content: [(rep: NSBitmapImageRep, rect: NSRect)]
+    }
+
     /// The inspector column lives inside an `NSGlassEffectView`, and a glass view composites its
     /// content instead of drawing it: from the root, the column photographs as an empty panel with
     /// only its footer. Starting the drawing at the scrolling content inside it gets that content
     /// back, so each one is photographed on its own and pasted where it sits. Rects come back in
     /// pixels, measured from the bottom left like the bitmap context they are drawn into.
-    private static func glassContent(in root: NSView, scale: CGFloat) -> [(rep: NSBitmapImageRep, rect: NSRect)] {
+    private static func glassPanels(in root: NSView, scale: CGFloat) -> [GlassPanel] {
         let base = root.convert(root.bounds, to: nil).origin
-        var found: [(rep: NSBitmapImageRep, rect: NSRect)] = []
-        func collect(_ view: NSView) {
+        func pixels(_ view: NSView) -> NSRect {
+            let frame = view.convert(view.bounds, to: nil)
+            return NSRect(x: (frame.minX - base.x) * scale, y: (frame.minY - base.y) * scale,
+                          width: frame.width * scale, height: frame.height * scale)
+        }
+        var panels: [GlassPanel] = []
+        func collect(_ view: NSView, into panel: inout GlassPanel) {
             if String(describing: type(of: view)) == "HostingClipView", let rep = cache(view) {
-                let frame = view.convert(view.bounds, to: nil)
-                found.append((rep, NSRect(x: (frame.minX - base.x) * scale, y: (frame.minY - base.y) * scale,
-                                          width: frame.width * scale, height: frame.height * scale)))
+                panel.content.append((rep, pixels(view)))
                 return
             }
-            view.subviews.forEach(collect)
+            for subview in view.subviews { collect(subview, into: &panel) }
         }
         func walk(_ view: NSView) {
             if String(describing: type(of: view)) == "NSGlassEffectView" {
-                collect(view)
+                var panel = GlassPanel(rect: pixels(view), content: [])
+                collect(view, into: &panel)
+                panels.append(panel)
                 return
             }
             view.subviews.forEach(walk)
         }
         walk(root)
-        return found
+        return panels
+    }
+
+    /// Every paste in this file, and the only way any of them should be done. `NSImageRep.draw(in:)`
+    /// composites with `copy`, which *replaces* the destination — including where the bitmap is
+    /// transparent, and a rounded corner is a bitmap that is transparent at the corners. Pasting a
+    /// window over a backdrop with `copy` punches the backdrop straight back out again, which is
+    /// how the popover's corners came out as four transparent squares.
+    private static func over(_ rep: NSBitmapImageRep, in rect: NSRect) {
+        rep.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1,
+                 respectFlipped: false, hints: nil)
     }
 
     /// The popover, centred on a band as wide as the site's column so the still is used at its own
@@ -392,14 +444,14 @@ final class DemoDriver {
             shadow.shadowBlurRadius = 26 * scale
             shadow.shadowOffset = NSSize(width: 0, height: -6 * scale)
             shadow.set()
-            popover.draw(in: target)
+            over(popover, in: target)
             NSGraphicsContext.current?.restoreGraphicsState()
         }
     }
 
     /// A fresh bitmap, drawn into in pixel coordinates. 32 bits with an alpha channel because a
     /// 24-bit rep has no `CGBitmapContext` behind it and cannot be drawn into at all; every caller
-    /// fills it edge to edge, so what comes out is opaque anyway.
+    /// starts by filling it edge to edge and pastes with `over`, so what comes out is opaque.
     private static func draw(size: NSSize, _ body: (NSSize) -> Void) -> NSBitmapImageRep? {
         guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width),
                                          pixelsHigh: Int(size.height), bitsPerSample: 8, samplesPerPixel: 4,
@@ -417,13 +469,17 @@ final class DemoDriver {
 
     // MARK: plumbing
 
-    private func prepare(_ window: NSWindow) async {
+    private func prepare(_ window: NSWindow) async throws {
         window.setContentSize(DemoCapture.windowSize)
         window.center()
         // Nothing is being typed into, so nothing should be carrying a blinking caret.
         window.makeFirstResponder(nil)
         await activate(window)
         try? marker("state", "active=\(NSApp.isActive) key=\(window.isKeyWindow)")
+        // Refusing rather than photographing it: a run behind the lock screen can never come to the
+        // front, and it produces a whole set of assets that look almost right — grey accents, grey
+        // window controls, and an inspector that never animates open — which is worse than none.
+        guard NSApp.isActive, window.isKeyWindow else { throw Failure.inactive }
     }
 
     /// Gets the window key and keeps asking until it is: an inactive window draws every

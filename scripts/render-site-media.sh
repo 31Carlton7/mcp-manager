@@ -13,8 +13,10 @@
 #
 #   scripts/render-site-media.sh
 #
-# Leave the Mac alone while it runs (about two minutes): the app has to stay frontmost, since an
-# inactive window draws its controls in the inactive grey.
+# Leave the Mac alone while it runs (about two minutes) — but leave it *unlocked*: the app has to
+# come to the front and stay there, and nothing can be frontmost behind the lock screen. An inactive
+# window draws its controls in the inactive grey and never animates its inspector open, so the run
+# refuses to write anything rather than hand the site a set of assets that look almost right.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 REPO="$PWD"
@@ -104,8 +106,9 @@ open(os.path.join(home, ".codex/config.toml"), "w").write("\n".join(lines))
 PY
 
 # Credentials for the scratch FileTokenStore (the shape in Sources/MCPMGateway/Tokens/TokenStore.swift):
-# notion is signed in from the start, and posthog's record is staged beside the live file for the
-# sign-in clip to drop into place.
+# notion is signed in, which is what the stills show, and posthog is not, which is its real state.
+# Two more copies are staged beside the live file — one without notion and one with it — and the
+# sign-in clip moves between them: it signs notion out, films the wait, and signs it back in.
 cat > "$HOME_DIR/.mcpm/tokens.json" <<'EOF'
 {
   "headers" : {},
@@ -122,14 +125,16 @@ cat > "$HOME_DIR/.mcpm/tokens.json" <<'EOF'
   }
 }
 EOF
-python3 - "$HOME_DIR/.mcpm/tokens.json" "$HOME_DIR/.mcpm/tokens.signed-in.json" <<'PY'
-import json, sys
-store = json.load(open(sys.argv[1]))
-store["tokens"]["posthog"] = dict(store["tokens"]["notion"],
-                                  tokenEndpoint="https://mcp.posthog.com/token")
-json.dump(store, open(sys.argv[2], "w"), indent=2, sort_keys=True)
+python3 - "$HOME_DIR/.mcpm" <<'PY'
+import json, os, sys
+root = sys.argv[1]
+store = json.load(open(os.path.join(root, "tokens.json")))
+json.dump(store, open(os.path.join(root, "tokens.signed-in.json"), "w"), indent=2, sort_keys=True)
+json.dump(dict(store, tokens={}), open(os.path.join(root, "tokens.signed-out.json"), "w"),
+          indent=2, sort_keys=True)
 PY
-chmod 600 "$HOME_DIR/.mcpm/tokens.json" "$HOME_DIR/.mcpm/tokens.signed-in.json"
+chmod 600 "$HOME_DIR/.mcpm/tokens.json" "$HOME_DIR/.mcpm/tokens.signed-in.json" \
+          "$HOME_DIR/.mcpm/tokens.signed-out.json"
 
 # ---------------------------------------------------------------- run
 
