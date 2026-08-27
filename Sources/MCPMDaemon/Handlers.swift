@@ -1,9 +1,13 @@
 import Foundation
+import os
 import MCPMCore
 import MCPMControl
 import MCPMGateway
 
 public let daemonVersion = MCPMVersion.current
+
+/// Public so the `mcpmd` executable logs under the same subsystem as the handlers it drives.
+public let log = Logger(subsystem: "co.charmtechnologies.mcpmd", category: "main")
 
 public enum HandlerError: Error, CustomStringConvertible {
     case notFound(String)
@@ -82,7 +86,9 @@ public struct Handlers: Sendable {
 
     public func handle(_ req: ControlRequest) async throws -> ControlResult {
         switch req.command {
-        case .hello:
+        case .hello(let p):
+            // The one place both versions are in hand; a mismatched pair is otherwise invisible.
+            log.notice("app \(p.appVersion, privacy: .public) connected to daemon \(daemonVersion, privacy: .public)")
             return .hello(daemonVersion: daemonVersion, apiVersion: controlAPIVersion)
         case .status, .subscribe:
             return .status(await status())

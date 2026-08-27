@@ -12,7 +12,7 @@ struct InspectorView: View {
     @Environment(DaemonClient.self) private var daemon
 
     @State private var argsText = ""
-    @State private var envRows: [EnvRow] = []
+    @State private var envRows: [KeyValueRow] = []
     @State private var advanced = false
     @State private var showRemove = false
     /// The header credential is write-only: the daemon keeps the value in the Keychain and never
@@ -25,13 +25,6 @@ struct InspectorView: View {
     @State private var authSelection: AuthKind = .none
     /// A switch that would sign the user out, waiting on them to say so.
     @State private var confirmAuth: AuthKind?
-
-    /// Identity that survives editing: keying rows by their name would renumber the list mid-word.
-    private struct EnvRow: Identifiable {
-        let id = UUID()
-        var key: String
-        var value: String
-    }
 
     private var status: ServerStatus? {
         guard let serverID else { return nil }
@@ -280,7 +273,7 @@ struct InspectorView: View {
                 switch status.server.kind {
                 case .stdio:
                     args(status)
-                    env(status)
+                    KeyValueEditor(.env, rows: $envRows) { commitEnv(status) }
                 case .remote:
                     headers(status)
                 }
@@ -299,38 +292,6 @@ struct InspectorView: View {
                 .font(Typography.mono)
                 .labelsHidden()
                 .onSubmit { commitArgs(status) }
-        }
-    }
-
-    private func env(_ status: ServerStatus) -> some View {
-        VStack(alignment: .leading, spacing: Space.xs) {
-            HStack {
-                SectionLabel("Env")
-                Spacer(minLength: 0)
-                Button { envRows.append(EnvRow(key: "", value: "")) } label: { Image(systemName: "plus") }
-                    .buttonStyle(.pressable)
-                    .foregroundStyle(.secondary)
-                    .accessibilityLabel("Add environment variable")
-            }
-            ForEach($envRows) { $row in
-                HStack(spacing: Space.xs) {
-                    TextField("KEY", text: $row.key)
-                        .onSubmit { commitEnv(status) }
-                    TextField("value", text: $row.value)
-                        .onSubmit { commitEnv(status) }
-                    Button {
-                        envRows.removeAll { $0.id == row.id }
-                        commitEnv(status)
-                    } label: {
-                        Image(systemName: "minus")
-                    }
-                    .buttonStyle(.pressable)
-                    .foregroundStyle(.secondary)
-                    .accessibilityLabel("Remove \(row.key.isEmpty ? "empty" : row.key) environment variable")
-                }
-                .textFieldStyle(.roundedBorder)
-                .font(Typography.mono)
-            }
         }
     }
 
@@ -431,7 +392,7 @@ struct InspectorView: View {
     /// mid-edit would wipe what the user is typing when an unrelated sync lands.
     private func loadFields() {
         argsText = status?.server.args.joined(separator: " ") ?? ""
-        envRows = (status?.server.env ?? [:]).sorted { $0.key < $1.key }.map { EnvRow(key: $0.key, value: $0.value) }
+        envRows = .init(status?.server.env ?? [:])
         headerName = "Authorization"
         headerValue = ""
         authSelection = status?.server.auth ?? .none
@@ -446,11 +407,7 @@ struct InspectorView: View {
     }
 
     private func commitEnv(_ status: ServerStatus) {
-        var env: [String: String] = [:]
-        for row in envRows {
-            let key = row.key.trimmingCharacters(in: .whitespaces)
-            if !key.isEmpty { env[key] = row.value }
-        }
+        let env = envRows.dictionary
         guard env != status.server.env else { return }
         daemon.update(UpdateServerParams(id: status.server.id, env: env))
     }
