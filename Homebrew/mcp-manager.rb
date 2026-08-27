@@ -9,7 +9,9 @@ cask "mcp-manager" do
   desc "One library of MCP servers, synced into every MCP client on your Mac"
   homepage "https://github.com/31Carlton7/mcp-manager"
 
-  depends_on macos: ">= :tahoe"
+  # A bare symbol already means "this version or newer"; the ">= :tahoe" string form is
+  # deprecated and warns on every install.
+  depends_on macos: :tahoe
 
   app "MCPManager.app"
 

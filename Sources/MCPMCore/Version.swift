@@ -2,7 +2,7 @@
 /// `MARKETING_VERSION` in `Apps/MCPManager/project.yml`, and `DaemonClient`'s fallback all read
 /// from here — bump this and `project.yml` together.
 ///
-/// The release tag must match `MCPMVersion.current` (tag `v0.1.1` for `"0.1.1"`).
+/// The release tag must match `MCPMVersion.current` (tag `v0.1.2` for `"0.1.2"`).
 public enum MCPMVersion {
-    public static let current = "0.1.1"
+    public static let current = "0.1.2"
 }

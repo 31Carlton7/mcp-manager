@@ -95,7 +95,7 @@ targets:
         # Keep in step with MCPMVersion.current in Sources/MCPMCore/Version.swift. The release
         # workflow can override it per-build with MARKETING_VERSION=... on the xcodebuild command
         # line, which wins over this project-level setting.
-        MARKETING_VERSION: "0.1.1"
+        MARKETING_VERSION: "0.1.2"
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: complete
