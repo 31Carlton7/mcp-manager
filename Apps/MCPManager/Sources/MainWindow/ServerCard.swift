@@ -15,8 +15,8 @@ extension Server {
     }
 }
 
-/// One server in the grid: who it is on top, which clients it is on along the bottom. The chips are
-/// buttons, so the common edit — turning a server on for one client — never needs the inspector.
+/// One server in the grid. The chips are buttons, so the common edit — turning a server on for one
+/// client — never needs the inspector.
 struct ServerCard: View {
     let status: ServerStatus
     let clients: [ClientStatus]
@@ -30,8 +30,7 @@ struct ServerCard: View {
     /// if the gesture is cancelled out from under us.
     @GestureState private var pressing = false
 
-    /// Hover lifts the card a hair and a press pushes it back — a pointer-sized amount, not a
-    /// bounce. Reduce Motion keeps the border feedback and drops the movement.
+    /// Reduce Motion keeps the border feedback and drops the movement.
     private var scale: CGFloat {
         guard !reduceMotion else { return 1 }
         if pressing { return 0.99 }
@@ -95,8 +94,6 @@ struct ServerCard: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                // Signed in and working. A dot rather than a word, because the card's job is to say
-                // which server this is and the subline already carries the sentence.
                 if status.authStatus == .connected {
                     StatusDot(tint: Semantic.green, size: 5, glow: false)
                         .accessibilityLabel("Signed in")
@@ -128,8 +125,6 @@ struct ServerCard: View {
         return Button {
             daemon.setClient(status.server.id, client.id, !on)
         } label: {
-            // The status pill of the language, one step down in size: four of these have to fit
-            // across a 220 pt card, and the dot is what carries the on/off reading anyway.
             StatusPill(text: Self.shortName(client), tint: on ? Semantic.green : .secondary,
                        dot: on, compact: true)
                 .contentShape(.capsule)

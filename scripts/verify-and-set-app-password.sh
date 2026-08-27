@@ -14,7 +14,7 @@ echo "Checking with Apple…"
 if xcrun notarytool history --apple-id "$APPLE_ID" --team-id "$TEAM_ID" --password "$PW" >/dev/null 2>&1; then
   printf '%s' "$PW" | gh secret set APPLE_APP_PASSWORD
   echo "✓ Apple accepted it, and it is now stored as APPLE_APP_PASSWORD."
-  echo "  Tell Claude to re-run the release."
+  echo "  Re-run the release workflow to pick it up."
 else
   echo "✗ Apple rejected that password. Nothing was stored."
   echo "  Generate a fresh one at https://appleid.apple.com while signed in as $APPLE_ID"

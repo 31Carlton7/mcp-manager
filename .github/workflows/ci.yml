@@ -22,7 +22,6 @@ jobs:
       # it, so the workflow keeps working on an image where 26 is already the default.
       - name: Select Xcode
         run: |
-          # Pick the newest Xcode 26.x on the image; fail loudly if none (the app needs the 26 SDK).
           latest=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
           if [ -n "$latest" ]; then sudo xcode-select -s "$latest"; fi
           xcodebuild -version | grep -q "Xcode 26" || { echo "Xcode 26 not found on this runner"; ls /Applications | grep Xcode; exit 1; }
@@ -36,15 +35,14 @@ jobs:
           key: spm-${{ runner.os }}-${{ hashFiles('Package.resolved') }}
           restore-keys: spm-${{ runner.os }}-
 
-      # Runs against the runner's real HOME, which is fine: the tests never touch client configs
-      # outside a temporary directory.
+      # Safe against the runner's real HOME: the tests only touch client configs under a
+      # temporary directory.
       - name: swift test (debug)
         run: swift test
 
-      # Release builds optimize differently, and 0.1.0 shipped a crash that only existed there:
-      # cancelling `Task.sleep(for:)` freed task allocations out of order and aborted the daemon
-      # on every connection test. Debug was green throughout. This is the step that would have
-      # caught it.
+      # Worth the second full run: release builds optimize differently, and 0.1.0 shipped a crash
+      # that existed only there (cancelling `Task.sleep(for:)` freed task allocations out of order
+      # and aborted the daemon on every connection test) while debug stayed green throughout.
       - name: swift test (release)
         run: swift test -c release
 

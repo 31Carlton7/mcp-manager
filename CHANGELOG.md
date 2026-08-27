@@ -18,7 +18,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   sheet checked a pasted URL. Cancelling `Task.sleep(for:)` frees task allocations out of order in
   optimized builds, which only ever showed in a release build, so every debug run looked fine.
 
-## [0.1.0] - Unreleased
+## [0.1.0] - 2026-08-27
 
 First release. Everything below is new.
 
@@ -45,17 +45,20 @@ First release. Everything below is new.
   connect.
 - **`mcpmd` daemon**, shipped inside the app bundle and installed as a LaunchAgent
   (`co.charmtechnologies.mcpmd`) through `SMAppService`, with a JSON-over-Unix-socket control API
-  on `~/.mcpm/mcpmd.sock` (mode 0600, peer UID checked) and an app/daemon version handshake.
+  on `~/.mcpm/mcpmd.sock` (mode 0600) and an app/daemon version handshake.
 - **Menu bar app.** Popover with active-server, installed-client and needs-attention counts, a
   master toggle per server and an inline sign-in button for servers that need one.
 - **Main window** built as a card grid with a pinned inspector. Each card shows the server, its
   transport and a chip per client, and clicking a chip toggles that server in that client without
   opening anything.
+- **Catalog tab.** A curated list bundled with the daemon, plus a live search of the official MCP
+  registry at `registry.modelcontextprotocol.io`, cached for a day and usable offline from the
+  bundled half alone. Picking an entry opens the Add sheet already filled in.
 - **Smart-paste Add sheet.** One paste of a URL, an `npx …` command line or the JSON block out of a
   README fills in the form; the fields almost nobody touches sit behind Advanced. Server icons come
   from a bundled symbol, the site's favicon or a monogram.
 - **Auth gateway** on `127.0.0.1:7337` (Hummingbird). Servers with `auth: oauth` or `auth: header`
-  are written to clients as `http://127.0.0.1:7337/s/<id>/mcp`; the gateway proxies upstream with
+  are written to clients as `http://localhost:7337/s/<id>/mcp`; the gateway proxies upstream with
   streaming and SSE passthrough, forwards `Mcp-Session-Id` untouched, strips any client-sent
   `Authorization`, and never logs bodies.
 - **OAuth sign-in** per the MCP spec: protected-resource and authorization-server metadata
@@ -75,4 +78,6 @@ First release. Everything below is new.
   while it is open. mcpm reads that as the user removing the server and turns the checkbox off;
   restart Claude Code and re-enable it.
 
+[0.1.2]: https://github.com/31Carlton7/mcp-manager/releases/tag/v0.1.2
+[0.1.1]: https://github.com/31Carlton7/mcp-manager/releases/tag/v0.1.1
 [0.1.0]: https://github.com/31Carlton7/mcp-manager/releases/tag/v0.1.0

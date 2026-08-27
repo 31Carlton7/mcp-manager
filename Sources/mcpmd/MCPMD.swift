@@ -86,10 +86,11 @@ enum MCPMD {
         // the single consumer means an older status can never land after a newer one.
         let (ticks, tick) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
 
+        let gatewayConfig = GatewayConfig(port: gatewayPort)
         let auth = AuthManager(store: makeTokenStore(root: paths.root),
                                oauth: OAuthClient(http: URLSessionHTTPClient()),
-                               redirectURI: GatewayConfig(port: gatewayPort).redirectURI())
-        let gateway = Gateway(config: GatewayConfig(port: gatewayPort), auth: auth,
+                               redirectURI: gatewayConfig.redirectURI())
+        let gateway = Gateway(config: gatewayConfig, auth: auth,
                               servers: LibraryServers(coord: coord, changed: { _ in tick.yield() }))
 
         // Before the first sync: that pass writes gateway URLs into client configs, and a client
@@ -164,7 +165,7 @@ enum MCPMD {
     /// selects a 0600 JSON file under `~/.mcpm` instead.
     private static func makeTokenStore(root: URL) -> any TokenStore {
         guard ProcessInfo.processInfo.environment["MCPM_TOKEN_STORE"] == "file" else {
-            return KeychainTokenStore(service: "co.charmtechnologies.mcpm")
+            return KeychainTokenStore()
         }
         log.info("using the file token store")
         return FileTokenStore(url: root.appendingPathComponent("tokens.json"))

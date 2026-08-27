@@ -39,11 +39,10 @@ public struct Server: Codable, Equatable, Sendable, Identifiable {
         case id, name, kind, command, args, env, url, headers, transport, auth, clients, source, createdAt
     }
 
-    /// Custom decode so `headers` and `transport` default when absent, keeping older library files
-    /// (written before either existed) loadable. An absent `transport` stays nil rather than
-    /// becoming `.http`: that is the one place the distinction between "HTTP" and "not yet known"
-    /// survives, and the sync needs it to avoid rewriting an SSE server on the first run after
-    /// the upgrade.
+    /// An absent `transport` stays nil rather than becoming `.http`: that is the one place the
+    /// distinction between "HTTP" and "not yet known" survives, and the sync needs it to avoid
+    /// rewriting an SSE server on the first run after the upgrade. `headers` predates neither, so
+    /// a library file written before it existed needs the default too.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
@@ -96,9 +95,6 @@ public struct Library: Codable, Equatable, Sendable {
         self.version = version; self.servers = servers
     }
     public func server(id: String) -> Server? { servers.first { $0.id == id } }
-    public mutating func upsert(_ s: Server) {
-        if let i = servers.firstIndex(where: { $0.id == s.id }) { servers[i] = s } else { servers.append(s) }
-    }
 }
 
 extension JSONEncoder {

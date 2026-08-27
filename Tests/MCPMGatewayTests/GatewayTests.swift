@@ -10,47 +10,6 @@ import ServiceLifecycle
 
 // MARK: - Test doubles
 
-/// A Hummingbird app on an ephemeral loopback port, so the tests exercise real sockets without
-/// reaching the network.
-actor TestHTTPServer {
-    private var runTask: Task<Void, Never>?
-    private var group: ServiceGroup?
-    private(set) var port = 0
-
-    struct DidNotStart: Error {}
-
-    func start(_ router: Router<BasicRequestContext>) async throws {
-        var logger = Logger(label: "test-upstream")
-        logger.logLevel = .warning
-
-        let (stream, ports) = AsyncStream<Int>.makeStream()
-        let app = Application(router: router,
-                              configuration: .init(address: .hostname("127.0.0.1", port: 0)),
-                              onServerRunning: { ports.yield($0.localAddress?.port ?? 0) },
-                              logger: logger)
-        var configuration = ServiceGroupConfiguration(services: [app], logger: logger)
-        configuration.maximumGracefulShutdownDuration = .seconds(2)
-        let group = ServiceGroup(configuration: configuration)
-        self.group = group
-        runTask = Task {
-            try? await group.run()
-            ports.finish()
-        }
-        var iterator = stream.makeAsyncIterator()
-        guard let bound = await iterator.next() else { throw DidNotStart() }
-        port = bound
-    }
-
-    func stop() async {
-        await group?.triggerGracefulShutdown()
-        await runTask?.value
-        group = nil
-        runTask = nil
-    }
-
-    var baseURL: URL { URL(string: "http://127.0.0.1:\(port)")! }
-}
-
 /// Counts how many times the guarded upstream route was hit, so "retried once" is measurable.
 actor Hits {
     private(set) var count = 0
@@ -135,12 +94,6 @@ private func upstreamRouter(hits: Hits, guardedToken: String) -> Router<BasicReq
     return router
 }
 
-extension HTTPField.Name {
-    static let mcpSessionID = HTTPField.Name("Mcp-Session-Id")!
-}
-
-/// `hits` also counts /mcp, so "the proxy never went there" is checkable.
-
 // MARK: - Fixture
 
 private struct Fixture {
@@ -177,37 +130,29 @@ private func withGateway(
     _ body: (Fixture) async throws -> Void
 ) async throws {
     let hits = Hits()
-    let upstream = TestHTTPServer()
-    try await upstream.start(upstreamRouter(hits: hits, guardedToken: guardedToken))
-    let upstreamBase = await upstream.baseURL
+    try await withServer(upstreamRouter(hits: hits, guardedToken: guardedToken)) { upstreamBase in
+        let store = try store ?? FileTokenStore(url: tmpDir().appendingPathComponent("tokens.json"))
+        let http = FakeHTTPClient()
+        try setUp(store, http)
+        let auth = AuthManager(store: store, oauth: OAuthClient(http: http),
+                               redirectURI: URL(string: "http://localhost:7337/oauth/callback")!)
 
-    let store = try store ?? FileTokenStore(url: tmpDir().appendingPathComponent("tokens.json"))
-    let http = FakeHTTPClient()
-    try setUp(store, http)
-    let auth = AuthManager(store: store, oauth: OAuthClient(http: http),
-                           redirectURI: URL(string: "http://localhost:7337/oauth/callback")!)
+        let source = FakeServerSource()
+        for server in servers(upstreamBase) { await source.add(server) }
 
-    let source = FakeServerSource()
-    for server in servers(upstreamBase) { await source.add(server) }
+        // No `upstream:` — the tests exercise the hardened session the daemon actually proxies
+        // through.
+        let gateway = Gateway(config: GatewayConfig(port: 0, maxRequestBytes: maxRequestBytes),
+                              auth: auth, servers: source)
+        try await gateway.start()
+        let port = await gateway.boundPort
 
-    // No `upstream:` — the tests exercise the hardened session the daemon actually proxies through.
-    let gateway = Gateway(config: GatewayConfig(port: 0, maxRequestBytes: maxRequestBytes),
-                          auth: auth, servers: source)
-    try await gateway.start()
-    let port = await gateway.boundPort
-
-    let fixture = Fixture(base: URL(string: "http://127.0.0.1:\(port)")!, upstream: upstreamBase,
-                          source: source, store: store, http: http, auth: auth, hits: hits,
-                          client: URLSession(configuration: .ephemeral))
-    do {
-        try await body(fixture)
-    } catch {
+        let fixture = Fixture(base: URL(string: "http://127.0.0.1:\(port)")!, upstream: upstreamBase,
+                              source: source, store: store, http: http, auth: auth, hits: hits,
+                              client: URLSession(configuration: .ephemeral))
+        do { try await body(fixture) } catch { await gateway.stop(); throw error }
         await gateway.stop()
-        await upstream.stop()
-        throw error
     }
-    await gateway.stop()
-    await upstream.stop()
 }
 
 /// The upstream's echo, decoded.

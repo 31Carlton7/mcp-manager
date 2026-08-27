@@ -74,7 +74,6 @@ public actor SyncCoordinator {
     public func setReadOnly(_ value: Bool) { readOnly = value }
 
     public func currentLibrary() -> Library { library }
-    public func lastSyncError() -> String? { lastError }
 
     public func snapshot() -> Snapshot {
         Snapshot(library: library, health: clientHealth(), lastError: lastError)
@@ -146,8 +145,7 @@ public actor SyncCoordinator {
         let out = SyncEngine.plan(SyncInput(library: library, snapshots: snapshots, suppressed: suppressed,
                                             gatewayPort: gatewayPort, now: now))
 
-        // Read-only: the plan is still the answer to "what would happen", and the health this pass
-        // gathered is still worth reporting, but nothing about it reaches a file.
+        // The plan and the health this pass gathered are still worth returning; see `readOnly`.
         guard !readOnly else {
             notifyIfChanged(healthBefore: healthBefore, errorBefore: errorBefore,
                             planChanged: false, alreadyChanged: alreadyChanged)

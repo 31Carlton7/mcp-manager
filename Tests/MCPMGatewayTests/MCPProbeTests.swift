@@ -30,21 +30,7 @@ private actor Recorder {
     func add(_ item: Seen) { seen.append(item) }
 }
 
-private func probeResult(for rpcMethod: String?, params: [String: Any]) -> [String: Any]? {
-    switch rpcMethod {
-    case "initialize":
-        return [
-            // Echoed, so the test can tell the server saw the version the probe offered.
-            "protocolVersion": params["protocolVersion"] as? String ?? "?",
-            "capabilities": ["tools": [String: Any]()],
-            "serverInfo": ["name": "fake-remote", "version": "2.3"],
-        ]
-    case "tools/list":
-        return ["tools": [["name": "search"], ["name": "fetch"], ["name": "create"]]]
-    default:
-        return nil
-    }
-}
+private let probeToolNames = ["search", "fetch", "create"]
 
 private func probeRouter(wire: Wire, status: HTTPResponse.Status, delay: Duration,
                          recorder: Recorder) -> Router<BasicRequestContext> {
@@ -54,10 +40,8 @@ private func probeRouter(wire: Wire, status: HTTPResponse.Status, delay: Duratio
     router.post("/mcp") { request, _ in
         let buffer = try await request.body.collect(upTo: 1024 * 1024)
         if delay > .zero { try await Task.sleep(for: delay) }
-        let message = (try? JSONSerialization.jsonObject(with: Data(buffer.readableBytesView)))
-            as? [String: Any]
-        let rpcMethod = message?["method"] as? String
-        await recorder.add(Seen(httpMethod: "POST", rpcMethod: rpcMethod,
+        let (message, data) = mcpResponse(to: buffer, toolNames: probeToolNames)
+        await recorder.add(Seen(httpMethod: "POST", rpcMethod: message?["method"] as? String,
                                 sessionID: request.headers[.mcpSessionID],
                                 accept: request.headers[.accept],
                                 apiKey: request.headers[apiKeyName]))
@@ -66,15 +50,7 @@ private func probeRouter(wire: Wire, status: HTTPResponse.Status, delay: Duratio
             return Response(status: status, headers: [.contentType: "application/json"],
                             body: .init(byteBuffer: ByteBuffer(string: #"{"error":"invalid_token"}"#)))
         }
-        // A notification carries no id and gets no answer, exactly as in the MCP spec.
-        guard let id = message?["id"] else { return Response(status: .accepted, body: .init()) }
-
-        let params = message?["params"] as? [String: Any] ?? [:]
-        let payload: [String: Any] = [
-            "jsonrpc": "2.0", "id": id,
-            "result": probeResult(for: rpcMethod, params: params) as Any,
-        ]
-        let data = try JSONSerialization.data(withJSONObject: payload)
+        guard let data else { return Response(status: .accepted, body: .init()) }
 
         var headers = HTTPFields()
         headers[.mcpSessionID] = "sess-7"
@@ -115,21 +91,13 @@ private func probeRouter(wire: Wire, status: HTTPResponse.Status, delay: Duratio
     return router
 }
 
-/// Runs the fake on an ephemeral loopback port for the duration of one test.
 private func withRemoteServer(wire: Wire = .json, status: HTTPResponse.Status = .ok,
                               delay: Duration = .zero,
                               _ body: (URL, Recorder) async throws -> Void) async throws {
     let recorder = Recorder()
-    let server = TestHTTPServer()
-    try await server.start(probeRouter(wire: wire, status: status, delay: delay, recorder: recorder))
-    let url = await server.baseURL.appendingPathComponent("mcp")
-    do {
-        try await body(url, recorder)
-    } catch {
-        await server.stop()
-        throw error
+    try await withServer(probeRouter(wire: wire, status: status, delay: delay, recorder: recorder)) { base in
+        try await body(base.appendingPathComponent("mcp"), recorder)
     }
-    await server.stop()
 }
 
 // MARK: - Remote

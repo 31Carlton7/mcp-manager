@@ -27,7 +27,8 @@ public struct ExternalServer: Codable, Hashable, Sendable {
         self.transport = Transport.stored(transport, kind: kind)
     }
 
-    /// `transport` arrived after the first release, so a value written without it still decodes.
+    /// Routed through the memberwise init so `Transport.stored` normalizes what was decoded; a
+    /// synthesized decoder would keep whatever spelling the data carried.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.init(name: try c.decode(String.self, forKey: .name),

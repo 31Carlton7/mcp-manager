@@ -17,17 +17,15 @@ final class StartupSettings {
 
     private(set) var appStatus: SMAppService.Status
     private(set) var daemonStatus: SMAppService.Status
-    /// The last registration failure, in the user's words rather than an `OSStatus`.
     private(set) var lastError: String?
-    /// The last restart failure. Separate from `lastError` so it can be reported next to the
-    /// button that caused it rather than under the login-item switches.
+    /// Separate from `lastError` so a restart failure can be reported next to the button that
+    /// caused it rather than under the login-item switches.
     private(set) var serviceError: String?
 
     private let app: SMAppService
     private let agent: SMAppService
-    /// Whether this launch has already rebound the agent. The automatic path gets one attempt: a
-    /// rebind that didn't help would fail the same way a second time, and re-registering a login
-    /// item is not something to retry in a loop.
+    /// The automatic rebind gets one attempt per launch: a rebind that didn't help would fail the
+    /// same way a second time, and re-registering a login item is not something to retry in a loop.
     private var reboundThisLaunch = false
 
     init() {
@@ -52,7 +50,7 @@ final class StartupSettings {
         set { set(newValue, on: agent) { self.daemonStatus = $0 } }
     }
 
-    /// Re-reads both statuses. Cheap, and the only way to notice a change made in System Settings.
+    /// The only way to notice a change made in System Settings.
     func refresh() {
         appStatus = app.status
         daemonStatus = agent.status

@@ -28,7 +28,7 @@ private actor Progress {
     func set(_ r: ProbeResult) { result = r }
 }
 
-actor Deadline {
+private actor Deadline {
     var expired = false
     func expire() { expired = true }
 }
@@ -37,8 +37,7 @@ actor Deadline {
 ///
 /// Deliberately a watchdog rather than two children of a task group racing each other: a group
 /// child that awaits an unstructured task's `value` and is then cancelled trips a task-allocator
-/// invariant in optimized builds, which crashed the daemon on every Test of a remote server in
-/// the 0.1.0 release build while every debug build was fine.
+/// invariant and aborts the process in optimized builds. Debug builds do not show it.
 func withDeadline<T: Sendable>(_ timeout: Duration,
                                        _ work: @escaping @Sendable () async -> T) async -> T? {
     let flow = Task(operation: work)
@@ -152,6 +151,47 @@ public enum MCPProbe {
     /// bytes; anything past this is not one.
     static let maxBodyBytes = 1024 * 1024
     static var clientInfo: [String: Any] { ["name": "MCP Manager", "version": MCPMVersion.current] }
+    /// Both shapes, because a Streamable-HTTP server chooses which one it answers in.
+    static let acceptMCP = "application/json, text/event-stream"
+
+    /// The session every probe and inspection runs on. Redirects are not followed: chasing one
+    /// would re-send the caller's headers — an API key, in the common case — to a host the server
+    /// named, and a 3xx is itself worth reporting, since `https://host/sse` answering 308 is how a
+    /// server says its endpoint moved.
+    static func session(timeout: Duration) -> URLSession {
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = seconds(timeout)
+        config.timeoutIntervalForResource = seconds(timeout)
+        config.httpShouldSetCookies = false
+        config.urlCache = nil
+        return URLSession(configuration: config, delegate: NoRedirectDelegate(), delegateQueue: nil)
+    }
+
+    /// One Streamable-HTTP request. `headers` is applied last, so a caller can override anything
+    /// set here.
+    static func request(_ url: URL, method: String = "POST", message: [String: Any]? = nil,
+                        headers: [String: String] = [:], sessionID: String? = nil) -> URLRequest {
+        var req = URLRequest(url: url)
+        req.httpMethod = method
+        req.setValue(acceptMCP, forHTTPHeaderField: "Accept")
+        if let message {
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = encode(message)
+        }
+        for (name, value) in headers { req.setValue(value, forHTTPHeaderField: name) }
+        if let sessionID { req.setValue(sessionID, forHTTPHeaderField: "Mcp-Session-Id") }
+        return req
+    }
+
+    /// What a status code says about the exchange, or nil when it says nothing is wrong.
+    /// `looksLikeLegacyTransport` matches these exact strings.
+    static func statusError(_ status: Int) -> String? {
+        switch status {
+        case 200...299: nil
+        case 401, 403: "needs sign-in"
+        default: "HTTP \(status)"
+        }
+    }
 
     // MARK: - JSON-RPC helpers
 
@@ -320,14 +360,7 @@ public enum MCPProbe {
     }
 
     static func remoteImpl(url: URL, headers: [String: String], timeout: Duration) async -> ProbeResult {
-        var result = ProbeResult(ok: false, durationMs: 0)
-
-        let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForRequest = seconds(timeout)
-        config.timeoutIntervalForResource = seconds(timeout)
-        config.httpShouldSetCookies = false
-        config.urlCache = nil
-        let session = URLSession(configuration: config, delegate: NoRedirectDelegate(), delegateQueue: nil)
+        let session = Self.session(timeout: timeout)
         defer { session.invalidateAndCancel() }
 
         let progress = Progress()
@@ -335,32 +368,22 @@ public enum MCPProbe {
             var partial = ProbeResult(ok: false, durationMs: 0)
             var sessionID: String?
 
-            func request(_ method: String, body: Data?) -> URLRequest {
-                var req = URLRequest(url: url)
-                req.httpMethod = method
-                req.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
-                if body != nil { req.setValue("application/json", forHTTPHeaderField: "Content-Type") }
-                for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
-                if let sessionID { req.setValue(sessionID, forHTTPHeaderField: "Mcp-Session-Id") }
-                req.httpBody = body
-                return req
+            func request(_ method: String, message: [String: Any]? = nil) -> URLRequest {
+                Self.request(url, method: method, message: message,
+                             headers: headers, sessionID: sessionID)
             }
 
             // 1. initialize
             let initHTTP: HTTPURLResponse
             let initObj: [String: Any]?
             do {
-                (initHTTP, initObj) = try await send(session, request("POST", body: encode(initializeMessage())),
+                (initHTTP, initObj) = try await send(session, request("POST", message: initializeMessage()),
                                                      expecting: 1)
             } catch {
                 partial.error = (error as NSError).localizedDescription
                 return partial
             }
-            switch initHTTP.statusCode {
-            case 200...299: break
-            case 401, 403: partial.error = "needs sign-in"; return partial
-            default: partial.error = "HTTP \(initHTTP.statusCode)"; return partial
-            }
+            if let why = statusError(initHTTP.statusCode) { partial.error = why; return partial }
             sessionID = initHTTP.value(forHTTPHeaderField: "Mcp-Session-Id")
             guard let initObj else {
                 partial.error = "could not parse initialize response"; return partial
@@ -369,10 +392,10 @@ public enum MCPProbe {
             await progress.set(partial)
 
             // 2. initialized notification (fire and forget)
-            _ = try? await send(session, request("POST", body: encode(initializedNotification)), expecting: nil)
+            _ = try? await send(session, request("POST", message: initializedNotification), expecting: nil)
 
             // 3. tools/list (best effort)
-            if let (http, obj) = try? await send(session, request("POST", body: encode(toolsListMessage)),
+            if let (http, obj) = try? await send(session, request("POST", message: toolsListMessage),
                                                  expecting: 2),
                (200...299).contains(http.statusCode), let obj {
                 partial.toolCount = toolCount(from: obj)
@@ -380,18 +403,19 @@ public enum MCPProbe {
 
             // 4. close the session (best effort)
             if sessionID != nil {
-                _ = try? await send(session, request("DELETE", body: nil), expecting: nil)
+                _ = try? await send(session, request("DELETE"), expecting: nil)
             }
             return partial
         }
+        return await settle(outcome, progress)
+    }
 
-        if let outcome { result = outcome; return result }
-        if let partial = await progress.result {
-            result = partial   // identified, the rest just never arrived
-            return result
-        }
-        result.error = "timed out"
-        return result
+    /// What the deadline left us with: the flow's own answer, else whatever it had identified
+    /// before the deadline hit, else a timeout.
+    fileprivate static func settle(_ outcome: ProbeResult?, _ progress: Progress) async -> ProbeResult {
+        if let outcome { return outcome }
+        if let partial = await progress.result { return partial }
+        return ProbeResult(ok: false, error: "timed out", durationMs: 0)
     }
 
     // MARK: - Remote (legacy HTTP+SSE)
@@ -462,14 +486,7 @@ public enum MCPProbe {
     /// naming where to post, and every response comes back down the stream rather than as the
     /// body of the POST that asked for it.
     static func remoteSSEImpl(url: URL, headers: [String: String], timeout: Duration) async -> ProbeResult {
-        var result = ProbeResult(ok: false, durationMs: 0)
-
-        let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForRequest = seconds(timeout)
-        config.timeoutIntervalForResource = seconds(timeout)
-        config.httpShouldSetCookies = false
-        config.urlCache = nil
-        let session = URLSession(configuration: config, delegate: NoRedirectDelegate(), delegateQueue: nil)
+        let session = Self.session(timeout: timeout)
         defer { session.invalidateAndCancel() }
 
         let progress = Progress()
@@ -479,18 +496,11 @@ public enum MCPProbe {
             /// Posts one message to the endpoint the server named. The answer arrives on the
             /// stream, so the response body here is drained and discarded.
             func post(_ message: [String: Any], to endpoint: URL) async throws {
-                var req = URLRequest(url: endpoint)
-                req.httpMethod = "POST"
-                req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                req.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
-                for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
-                req.httpBody = encode(message)
+                let req = Self.request(endpoint, message: message, headers: headers)
                 let (bytes, response) = try await session.bytes(for: req)
                 for try await _ in bytes {}
                 let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-                guard (200...299).contains(status) else {
-                    throw ProbeFailure(status == 401 || status == 403 ? "needs sign-in" : "HTTP \(status)")
-                }
+                if let why = statusError(status) { throw ProbeFailure(why) }
             }
 
             var open = URLRequest(url: url)
@@ -508,11 +518,7 @@ public enum MCPProbe {
             guard let http = response as? HTTPURLResponse else {
                 partial.error = "not an HTTP response"; return partial
             }
-            switch http.statusCode {
-            case 200...299: break
-            case 401, 403: partial.error = "needs sign-in"; return partial
-            default: partial.error = "HTTP \(http.statusCode)"; return partial
-            }
+            if let why = statusError(http.statusCode) { partial.error = why; return partial }
             guard http.value(forHTTPHeaderField: "Content-Type")?.lowercased()
                 .contains("text/event-stream") == true else {
                 partial.error = "the server did not open an event stream"; return partial
@@ -553,11 +559,7 @@ public enum MCPProbe {
             }
             return partial
         }
-
-        if let outcome { result = outcome; return result }
-        if let partial = await progress.result { result = partial; return result }
-        result.error = "timed out"
-        return result
+        return await settle(outcome, progress)
     }
 
     // MARK: - Stdio

@@ -8,34 +8,13 @@ import NIOCore
 
 // MARK: - Fakes
 
-/// The JSON-RPC answers the fakes give, shared with the legacy-SSE fake below.
-private func rpcResult(for method: String?, params: [String: Any]) -> [String: Any]? {
-    switch method {
-    case "initialize":
-        return ["protocolVersion": params["protocolVersion"] as? String ?? "?",
-                "capabilities": ["tools": [String: Any]()],
-                "serverInfo": ["name": "fake-remote", "version": "2.3"]]
-    case "tools/list":
-        return ["tools": [["name": "search"], ["name": "fetch"]]]
-    default:
-        return nil
-    }
-}
-
-private func rpcResponse(to buffer: ByteBuffer) -> (id: Any?, data: Data?) {
-    let message = (try? JSONSerialization.jsonObject(with: Data(buffer.readableBytesView))) as? [String: Any]
-    guard let id = message?["id"] else { return (nil, nil) }
-    let payload: [String: Any] = ["jsonrpc": "2.0", "id": id,
-                                  "result": rpcResult(for: message?["method"] as? String,
-                                                      params: message?["params"] as? [String: Any] ?? [:]) as Any]
-    return (id, try? JSONSerialization.data(withJSONObject: payload))
-}
+private let inspectToolNames = ["search", "fetch"]
 
 /// A Streamable-HTTP endpoint at `/mcp` that answers in plain JSON.
 private func mcpRoute(_ router: Router<BasicRequestContext>, path: String = "/mcp") {
     router.post(RouterPath(path)) { request, _ in
         let buffer = try await request.body.collect(upTo: 1024 * 1024)
-        let (_, data) = rpcResponse(to: buffer)
+        let (_, data) = mcpResponse(to: buffer, toolNames: inspectToolNames)
         guard let data else { return Response(status: .accepted, body: .init()) }
         return Response(status: .ok, headers: [.contentType: "application/json"],
                         body: .init(byteBuffer: ByteBuffer(bytes: data)))
@@ -62,7 +41,7 @@ private func protectedRoute(_ router: Router<BasicRequestContext>, publishMetada
         let prm = "http://\(host)/.well-known/oauth-protected-resource/mcp"
         var headers = HTTPFields()
         headers[.contentType] = "application/json"
-        headers[HTTPField.Name("WWW-Authenticate")!] = #"Bearer resource_metadata="\#(prm)""#
+        headers[.wwwAuthenticate] = #"Bearer resource_metadata="\#(prm)""#
         return Response(status: .unauthorized, headers: headers,
                         body: .init(byteBuffer: ByteBuffer(string: #"{"error":"invalid_token"}"#)))
     }
@@ -100,8 +79,7 @@ private func legacySSERoutes(_ router: Router<BasicRequestContext>, path: String
     }
     router.post("/messages") { request, _ in
         let buffer = try await request.body.collect(upTo: 1024 * 1024)
-        let message = (try? JSONSerialization.jsonObject(with: Data(buffer.readableBytesView))) as? [String: Any]
-        let (_, data) = rpcResponse(to: buffer)
+        let (message, data) = mcpResponse(to: buffer, toolNames: inspectToolNames)
         if let data {
             await bus.send("event: message\ndata: \(String(decoding: data, as: UTF8.self))\n\n")
         }
@@ -110,17 +88,6 @@ private func legacySSERoutes(_ router: Router<BasicRequestContext>, path: String
         if message?["method"] as? String == "tools/list" { await bus.finish() }
         return Response(status: .accepted, body: .init())
     }
-}
-
-private func withServer(_ configure: (Router<BasicRequestContext>) -> Void,
-                        _ body: (URL) async throws -> Void) async throws {
-    let router = Router()
-    configure(router)
-    let server = TestHTTPServer()
-    try await server.start(router)
-    let base = await server.baseURL
-    do { try await body(base) } catch { await server.stop(); throw error }
-    await server.stop()
 }
 
 // MARK: - inspect
@@ -165,7 +132,7 @@ private func withServer(_ configure: (Router<BasicRequestContext>) -> Void,
     }
 }
 
-/// The bug this whole plan came from: a docs page pasted into the Add sheet.
+/// A docs page pasted into the Add sheet — the case this whole check exists for.
 @Test func aDocsPageIsNotAnEndpointAndTheSiblingEndpointIsSuggested() async throws {
     try await withServer({ router in
         htmlRoute(router, path: "/docs/model-context-protocol")
@@ -272,7 +239,7 @@ private func walledRoute(_ router: Router<BasicRequestContext>, path: String,
     router.post(RouterPath(path)) { _, _ in
         var headers = HTTPFields()
         headers[.contentType] = contentType
-        if let challenge { headers[HTTPField.Name("WWW-Authenticate")!] = challenge }
+        if let challenge { headers[.wwwAuthenticate] = challenge }
         return Response(status: status, headers: headers,
                         body: .init(byteBuffer: ByteBuffer(string: "<html>sign in</html>")))
     }

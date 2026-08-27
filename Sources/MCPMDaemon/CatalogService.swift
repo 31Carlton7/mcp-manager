@@ -201,8 +201,10 @@ enum CatalogNormalizer {
         return order.compactMap { best[$0]?.entry }
     }
 
-    /// Version comparison for strings the registry does not promise anything about: numeric
-    /// components compare as numbers, anything else falls back to a plain string comparison.
+    /// Version comparison for strings the registry does not promise anything about. Numeric
+    /// components compare as numbers, and a component with no leading digit — `v1.2`, `main`,
+    /// `latest` — sorts below every numbered one, which is why this is not just
+    /// `compare(options: .numeric)`: that ranks `main` above `9.0.0`.
     static func isNewer(_ lhs: String?, than rhs: String?) -> Bool {
         guard let lhs else { return false }
         guard let rhs else { return true }
@@ -312,8 +314,7 @@ public actor CatalogService {
     public func search(query: String, limit: Int = 30) async -> [CatalogEntry] {
         // `prefix` traps on a negative length, and a caller is not the one who decides how much of
         // this daemon's memory a search gets to use.
-        let limit = min(max(limit, CatalogSearchParams.limits.lowerBound),
-                        CatalogSearchParams.limits.upperBound)
+        let limit = CatalogSearchParams.clamp(limit)
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let curated = CatalogNormalizer.matching(bundled, query: trimmed)
         guard !trimmed.isEmpty else { return Array(curated.prefix(limit)) }

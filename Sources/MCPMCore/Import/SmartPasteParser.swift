@@ -97,9 +97,11 @@ public enum SmartPasteParser {
             switch (flag, value) {
             case ("--env", let v?), ("-e", let v?): if let (k, v) = pair(v, separator: "=") { env[k] = v }
             case ("--header", let v?), ("-H", let v?): if let (k, v) = pair(v, separator: ":") { headers[k] = v }
-            // `--transport stdio` says nothing a command line doesn't already say, so only the
-            // one value that changes how a remote server is dialled is kept.
+            // `--transport stdio` says nothing a command line doesn't already say. `http` is kept
+            // even though it is the default, so that an explicit choice outranks the guess
+            // `transportFromPath` would otherwise make from an `/sse` URL.
             case ("--transport", "sse"), ("-t", "sse"): transport = .sse
+            case ("--transport", "http"), ("-t", "http"): transport = .http
             default: break
             }
             i += 1
@@ -143,7 +145,6 @@ public enum SmartPasteParser {
         if let section = obj["mcpServers"] as? [String: Any] {
             servers = section.compactMap { k, v in (v as? [String: Any]).flatMap { JSONMCPServers.external(name: k, dict: $0) } }
         } else if let one = JSONMCPServers.external(name: "", dict: obj) {
-            // bare server object → derive a name
             let name = one.kind == .remote ? nameFromHost(URL(string: one.url ?? "")?.host ?? "server")
                                            : nameFromCommand(one.command ?? "server", args: one.args)
             servers = [ExternalServer(name: name, kind: one.kind, command: one.command, args: one.args,

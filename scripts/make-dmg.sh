@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 # Build a compressed DMG containing the app and a link to /Applications.
-# Nothing here needs anything that is not already on a stock macOS runner.
 #
 #   scripts/make-dmg.sh <path-to-.app> <version> <output.dmg>
 set -euo pipefail

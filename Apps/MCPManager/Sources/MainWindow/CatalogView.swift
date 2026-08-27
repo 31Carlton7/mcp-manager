@@ -2,9 +2,9 @@ import SwiftUI
 import MCPMCore
 import MCPMControl
 
-/// The catalog tab: a curated list to browse and the official registry to search, with an Add on
-/// every card that opens the Add sheet already filled in. Nothing here is added directly — the
-/// sheet is where a server gets its name, its clients and its auth, and where the URL is checked.
+/// The catalog tab: a curated list to browse and the official registry to search. Nothing here is
+/// added directly — the Add sheet is where a server gets its name, its clients and its auth, and
+/// where the URL is checked.
 struct CatalogView: View {
     /// Hands an entry to the main window, which opens the Add sheet on it.
     let add: (CatalogEntry) -> Void
@@ -33,8 +33,7 @@ struct CatalogView: View {
         // Keyed on the query, so a keystroke cancels the search the last one started and the
         // answer to a query nobody is looking at any more is never shown.
         .task(id: query) { await search() }
-        // Demo capture only: typing into the field from the scripted scene. Not installed in a
-        // normal run — see DemoCapture.swift.
+        // Demo capture only; see DemoCapture.swift.
         .onAppear { if DemoCapture.isActive { DemoHooks.setCatalogQuery = { self.query = $0 } } }
         .animation(.snappy(duration: 0.2), value: offline)
     }
@@ -44,25 +43,7 @@ struct CatalogView: View {
     private var trimmedQuery: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
 
     private var searchField: some View {
-        HStack(spacing: Space.xs) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-            TextField("Search the MCP registry", text: $query)
-                .textFieldStyle(.plain)
-                .font(Typography.field)
-            if loading {
-                ProgressView().controlSize(.mini)
-            } else if !query.isEmpty {
-                Button { query = "" } label: { Image(systemName: "xmark.circle.fill").font(.system(size: 11)) }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                    .accessibilityLabel("Clear search")
-            }
-        }
-        .padding(.horizontal, Space.s)
-        .padding(.vertical, 5)
-        .pill()
+        SearchField(prompt: "Search the MCP registry", text: $query, loading: loading)
     }
 
     @ViewBuilder private var offlineNote: some View {
@@ -94,7 +75,7 @@ struct CatalogView: View {
             // The curated list is bundled, so it is still true when nothing can be reached; only
             // when we never got even that is there nothing to show.
             if curated.isEmpty {
-                failure = reason(error)
+                failure = DaemonClient.reason(error)
             } else {
                 entries = matching(curated, query: query)
                 offline = true
@@ -110,11 +91,6 @@ struct CatalogView: View {
             $0.name.lowercased().contains(needle) || $0.slug.contains(needle)
                 || $0.description.lowercased().contains(needle)
         }
-    }
-
-    private func reason(_ error: Error) -> String {
-        if case ControlClientError.remote(let why) = error { return why }
-        return String(describing: error)
     }
 
     // MARK: results
@@ -133,9 +109,8 @@ struct CatalogView: View {
                                                                 : "No server matches “\(trimmedQuery)”.")))
             }
         } else {
-            // Rows as plates rather than a grid of cards: a browsable list of installable things
-            // reads better as discrete rows, and the description gets the full width to say what
-            // the server actually is.
+            // Spec adjustment: rows as plates rather than a grid of cards, so the description gets
+            // the full width to say what the server actually is.
             ScrollView {
                 LazyVStack(spacing: Space.m) {
                     ForEach(entries) { entry in
@@ -153,8 +128,7 @@ struct CatalogView: View {
 
     /// Whether the library already has this server: the same endpoint or the same command line,
     /// and failing both, the same name — but only against a server of the same kind, so a local
-    /// `github` can't hide the hosted one. Nothing stops a second copy; a card that says "Added"
-    /// is just the answer to the question the user is actually asking.
+    /// `github` can't hide the hosted one. Nothing stops a second copy being added anyway.
     private func alreadyInLibrary(_ entry: CatalogEntry) -> Bool {
         daemon.servers.contains { status in
             let server = status.server
@@ -176,8 +150,8 @@ struct CatalogView: View {
     private func basename(_ path: String) -> String { (path as NSString).lastPathComponent }
 }
 
-/// One catalog entry as a plate: a fixed icon column, who it is and what it is, and whether it is
-/// already in the library. Separated from its neighbours by the block gutter rather than by a rule.
+/// One catalog entry as a plate, separated from its neighbours by the block gutter rather than by
+/// a rule.
 private struct CatalogRow: View {
     let entry: CatalogEntry
     let added: Bool
@@ -216,9 +190,10 @@ private struct CatalogRow: View {
 
     private var badges: some View {
         HStack(spacing: Space.xs) {
-            badge(transportLabel)
-            badge(sourceLabel, tint: entry.source == .registry && entry.official ? Semantic.cyan : nil)
-            badge(authLabel, tint: entry.auth == .none ? nil : Semantic.yellow)
+            MicroBadge(text: transportLabel)
+            MicroBadge(text: sourceLabel,
+                       tint: entry.source == .registry && entry.official ? Semantic.cyan : nil)
+            MicroBadge(text: authLabel, tint: entry.auth == .none ? nil : Semantic.yellow)
         }
     }
 
@@ -233,24 +208,6 @@ private struct CatalogRow: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
         }
-    }
-
-    /// Neutral by default — a low opacity of the primary colour — and hued only where the hue means
-    /// something, in which case it also takes the stroked micro-badge form.
-    private func badge(_ text: String, tint: Color? = nil) -> some View {
-        Text(text.uppercased())
-            .font(Typography.microBadge)
-            .tracking(Typography.microBadgeTracking)
-            .lineLimit(1)
-            .foregroundStyle(tint ?? .secondary)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 1.5)
-            .background((tint?.opacity(0.16) ?? Color.primary.opacity(0.08)), in: .capsule)
-            .overlay {
-                if let tint {
-                    Capsule().strokeBorder(tint.opacity(0.35), lineWidth: 0.5)
-                }
-            }
     }
 
     /// "stdio" / "remote" / "remote · sse" — the transport only shows when it isn't the default.

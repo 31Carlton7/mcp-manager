@@ -69,8 +69,6 @@ struct OnboardingSheet: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.78)
             Spacer(minLength: Space.m)
-            // The current step stretches into a pill rather than growing into a bigger circle, so
-            // the row of dots keeps one height.
             HStack(spacing: 5) {
                 ForEach(Step.allCases, id: \.rawValue) { dot in
                     Capsule()
@@ -110,22 +108,14 @@ struct OnboardingSheet: View {
             VStack(alignment: .leading, spacing: Space.s) {
                 HStack(spacing: Space.s) {
                     Toggle("Start it at login", isOn: $startup.daemonAtLogin)
-                    Text("Recommended".uppercased())
-                        .font(Typography.microBadge)
-                        .tracking(Typography.microBadgeTracking)
-                        .foregroundStyle(Semantic.green)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 1.5)
-                        .background(Semantic.green.opacity(0.16), in: .capsule)
-                        .overlay { Capsule().strokeBorder(Semantic.green.opacity(0.35), lineWidth: 0.5) }
+                    MicroBadge(text: "Recommended", tint: Semantic.green)
                     Spacer(minLength: 0)
                 }
                 Text("Without this, your servers stop syncing the next time you restart the Mac.")
                     .font(Typography.rowCaption)
                     .foregroundStyle(.secondary)
-                // Registering again cannot clear an approval the user withheld — only they can,
-                // in System Settings — so this asks for that rather than offering a button that
-                // would no-op.
+                // Registering again cannot clear an approval the user withheld, so this asks for
+                // System Settings rather than offering a button that would no-op.
                 if startup.daemonStatus == .requiresApproval {
                     HStack(spacing: Space.s) {
                         Text("Approve MCP Manager in System Settings → Login Items")
@@ -182,8 +172,8 @@ struct OnboardingSheet: View {
         }
     }
 
-    /// Grouped by the client the servers were found in, so the list reads the way the user's Mac
-    /// is laid out. A server in two clients appears under both — that is the point.
+    /// Grouped by the client the servers were found in. A server in two clients appears under
+    /// both — that is the point.
     private struct ClientGroup {
         var client: ClientID
         var name: String
@@ -302,7 +292,6 @@ struct OnboardingSheet: View {
 
     private var doneStep: some View {
         VStack(alignment: .leading, spacing: Space.l) {
-            // The one 30 pt tile in the app, accent-filled because the thing it stands for is now on.
             Image(systemName: "powerplug.fill")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(.white)

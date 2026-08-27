@@ -12,11 +12,9 @@ import MCPMCore
 }
 
 @Test func requestEncodesRoundTrip() throws {
-    let req = ControlRequest(id: 1, command: .setAll(.init(id: "a", enabled: false)))
-    let data = try JSONEncoder.mcpm.encode(req)
-    let obj = try JSONSerialization.jsonObject(with: data) as! [String: Any]
-    #expect(obj["method"] as! String == "servers.setAll")
-    #expect(try JSONDecoder.mcpm.decode(ControlRequest.self, from: data) == req)
+    let command = ControlCommand.setAll(.init(id: "a", enabled: false))
+    #expect(command.method == "servers.setAll")
+    #expect(try roundTrip(command).command == command)
 }
 
 @Test func unknownMethodFailsToDecode() {
@@ -26,23 +24,22 @@ import MCPMCore
 }
 
 @Test func responseAndEventEncode() throws {
-    let ok = ControlResponse(id: 3, result: .status(DaemonStatus(daemonVersion: "0.1.0", apiVersion: 1, servers: [], clients: [])))
+    let ok = ControlResponse(id: 3, result: .status(aStatus()))
     let s = String(decoding: try JSONEncoder.mcpm.encode(ok), as: UTF8.self)
     #expect(s.contains("\"ok\" : true"))
     let err = ControlResponse(id: 3, error: "boom")
     #expect(String(decoding: try JSONEncoder.mcpm.encode(err), as: UTF8.self).contains("\"error\" : \"boom\""))
-    let ev = ControlEvent.status(DaemonStatus(daemonVersion: "0.1.0", apiVersion: 1, servers: [], clients: []))
+    let ev = ControlEvent.status(aStatus())
     #expect(String(decoding: try JSONEncoder.mcpm.encode(ev), as: UTF8.self).contains("\"event\" : \"status\""))
 }
 
 @Test func wireEncoderEmitsSingleLine() throws {
-    let ev = ControlEvent.status(DaemonStatus(daemonVersion: "0.1.0", apiVersion: 1, servers: [], clients: []))
-    let s = String(decoding: try JSONEncoder.mcpmWire.encode(ev), as: UTF8.self)
+    let s = String(decoding: try JSONEncoder.mcpmWire.encode(ControlEvent.status(aStatus())), as: UTF8.self)
     #expect(!s.contains("\n"))
 }
 
 @Test func inboundDistinguishesResponsesFromEvents() throws {
-    let status = DaemonStatus(daemonVersion: "0.1.0", apiVersion: 1, servers: [], clients: [])
+    let status = aStatus()
     let evData = try JSONEncoder.mcpmWire.encode(ControlEvent.status(status))
     guard case .event(let e) = try ControlInbound.decode(evData) else { Issue.record("expected event"); return }
     #expect(e == .status(status))
@@ -55,9 +52,8 @@ import MCPMCore
 @Test func clientAndDaemonStatusCarryWatchedAndLastError() throws {
     let c = ClientStatus(id: .cursor, displayName: "Cursor", installed: true, configPath: "/tmp/x",
                          healthy: false, watched: true, error: "nope", lastSync: nil)
-    let status = DaemonStatus(daemonVersion: "0.1.0", apiVersion: controlAPIVersion, servers: [],
-                              clients: [c], lastError: "sync failed")
-    let round = try JSONDecoder.mcpm.decode(DaemonStatus.self, from: JSONEncoder.mcpmWire.encode(status))
+    let status = aStatus(clients: [c], lastError: "sync failed")
+    let round = try roundTrip(status)
     #expect(round == status)
     #expect(round.clients[0].watched)
     #expect(round.lastError == "sync failed")
@@ -71,10 +67,7 @@ import MCPMCore
     .testServer(.init(id: "notion")),
 ])
 func authAndTestCommandsRoundTrip(command: ControlCommand) throws {
-    let data = try JSONEncoder.mcpm.encode(ControlRequest(id: 2, command: command))
-    let obj = try JSONSerialization.jsonObject(with: data) as! [String: Any]
-    #expect(obj["method"] as! String == command.method)
-    #expect(try JSONDecoder.mcpm.decode(ControlRequest.self, from: data).command == command)
+    #expect(try roundTrip(command, id: 2).command == command)
 }
 
 @Test func updateServerParamsCarriesHeadersAndOmitsUntouchedFields() throws {
@@ -100,15 +93,15 @@ func authAndTestCommandsRoundTrip(command: ControlCommand) throws {
 
 @Test func authorizeURLAndTestResultRoundTrip() throws {
     let url = ControlResult.authorizeURL("https://mcp.notion.com/authorize?client_id=x&state=y")
-    #expect(try JSONDecoder.mcpm.decode(ControlResult.self, from: JSONEncoder.mcpmWire.encode(url)) == url)
+    #expect(try roundTrip(url) == url)
 
     let result = ControlResult.testResult(TestResult(ok: true, serverName: "notion", serverVersion: "1.2",
                                                      protocolVersion: "2025-06-18", toolCount: 12,
                                                      durationMs: 340))
-    #expect(try JSONDecoder.mcpm.decode(ControlResult.self, from: JSONEncoder.mcpmWire.encode(result)) == result)
+    #expect(try roundTrip(result) == result)
 
     let failed = TestResult(ok: false, error: "needs sign-in", durationMs: 12)
-    #expect(try JSONDecoder.mcpm.decode(TestResult.self, from: JSONEncoder.mcpmWire.encode(failed)) == failed)
+    #expect(try roundTrip(failed) == failed)
 }
 
 @Test func daemonStatusCarriesGatewayPort() throws {
@@ -116,9 +109,8 @@ func authAndTestCommandsRoundTrip(command: ControlCommand) throws {
                                         url: "https://mcp.notion.com/mcp", auth: .oauth,
                                         source: "manual", createdAt: .init()),
                          state: "needsAuth")
-    let status = DaemonStatus(daemonVersion: "0.1.0", apiVersion: controlAPIVersion, servers: [s],
-                              clients: [], gatewayPort: 7337)
-    let round = try JSONDecoder.mcpm.decode(DaemonStatus.self, from: JSONEncoder.mcpmWire.encode(status))
+    let status = aStatus(servers: [s], gatewayPort: 7337)
+    let round = try roundTrip(status)
     #expect(round == status)
     #expect(round.gatewayPort == 7337)
     #expect(round.servers[0].state == "needsAuth")
@@ -140,8 +132,7 @@ func authAndTestCommandsRoundTrip(command: ControlCommand) throws {
     #expect(p.url == "https://mcp.notion.com/mcp")
 
     let withHeaders = AddServerParams(name: "n", kind: .remote, url: "https://x.dev/mcp", headers: ["X-Key": "v"])
-    let round = try JSONDecoder.mcpm.decode(AddServerParams.self, from: JSONEncoder.mcpm.encode(withHeaders))
-    #expect(round == withHeaders)
+    #expect(try roundTrip(withHeaders) == withHeaders)
 }
 
 // MARK: - Settings
@@ -150,18 +141,15 @@ func authAndTestCommandsRoundTrip(command: ControlCommand) throws {
     for command in [ControlCommand.getSettings,
                     .setSettings(.init(gatewayPort: 9001, backupRetention: 3)),
                     .setSettings(.init(backupRetention: 3))] {
-        let req = ControlRequest(id: 4, command: command)
-        let round = try JSONDecoder.mcpm.decode(ControlRequest.self, from: JSONEncoder.mcpmWire.encode(req))
-        #expect(round == req)
+        #expect(try roundTrip(command, id: 4).command == command)
     }
     let result = ControlResult.settings(Settings(gatewayPort: 9001, backupRetention: 3))
-    #expect(try JSONDecoder.mcpm.decode(ControlResult.self, from: JSONEncoder.mcpmWire.encode(result)) == result)
+    #expect(try roundTrip(result) == result)
 }
 
 @Test func daemonStatusCarriesThePendingRestartFlag() throws {
-    let status = DaemonStatus(daemonVersion: "0.1.0", apiVersion: controlAPIVersion, servers: [], clients: [],
-                              gatewayPort: 7337, settingsPendingRestart: true)
-    let round = try JSONDecoder.mcpm.decode(DaemonStatus.self, from: JSONEncoder.mcpmWire.encode(status))
+    let status = aStatus(gatewayPort: 7337, settingsPendingRestart: true)
+    let round = try roundTrip(status)
     #expect(round == status)
     #expect(round.settingsPendingRestart)
 }
@@ -177,9 +165,9 @@ func authAndTestCommandsRoundTrip(command: ControlCommand) throws {
 
 @Test func addServerParamsCarriesTheTransport() throws {
     let p = AddServerParams(name: "a", kind: .remote, url: "https://a/mcp", transport: .sse)
-    let req = ControlRequest(id: 1, command: .addServer(p))
-    let round = try JSONDecoder.mcpm.decode(ControlRequest.self, from: JSONEncoder.mcpmWire.encode(req))
-    guard case .addServer(let back) = round.command else { Issue.record("wrong command"); return }
+    guard case .addServer(let back) = try roundTrip(.addServer(p)).command else {
+        Issue.record("wrong command"); return
+    }
     #expect(back.transport == .sse)
 }
 
@@ -193,10 +181,7 @@ func authAndTestCommandsRoundTrip(command: ControlCommand) throws {
 
 @Test(arguments: [ControlCommand.syncPreview, .confirmImport])
 func onboardingCommandsRoundTrip(command: ControlCommand) throws {
-    let data = try JSONEncoder.mcpm.encode(ControlRequest(id: 9, command: command))
-    let obj = try JSONSerialization.jsonObject(with: data) as! [String: Any]
-    #expect(obj["method"] as! String == command.method)
-    #expect(try JSONDecoder.mcpm.decode(ControlRequest.self, from: data).command == command)
+    #expect(try roundTrip(command, id: 9).command == command)
 }
 
 @Test func syncPreviewRoundTrips() throws {
@@ -204,8 +189,7 @@ func onboardingCommandsRoundTrip(command: ControlCommand) throws {
         adopted: [ServerSummary(id: "notion", name: "Notion", kind: .remote, clients: [.cursor, .codex])],
         writes: [ClientWrite(client: .cursor, adds: ["linear"], removes: [], changes: ["notion"])])
     let result = ControlResult.syncPreview(preview)
-    let data = try JSONEncoder.mcpmWire.encode(result)
-    #expect(try JSONDecoder.mcpm.decode(ControlResult.self, from: data) == result)
+    #expect(try roundTrip(result) == result)
 }
 
 /// A daemon that predates onboarding sends no such key, and gating a working install behind a
@@ -218,9 +202,8 @@ func onboardingCommandsRoundTrip(command: ControlCommand) throws {
 }
 
 @Test func aStatusCarriesAnUnconfirmedImportAcrossTheWire() throws {
-    let status = DaemonStatus(daemonVersion: "0.1.0", apiVersion: controlAPIVersion, servers: [],
-                              clients: [], importConfirmed: false)
-    let round = try JSONDecoder.mcpm.decode(DaemonStatus.self, from: JSONEncoder.mcpmWire.encode(status))
+    let status = aStatus(importConfirmed: false)
+    let round = try roundTrip(status)
     #expect(round == status)
     #expect(round.importConfirmed == false)
 }
@@ -231,10 +214,7 @@ func onboardingCommandsRoundTrip(command: ControlCommand) throws {
     .inspectURL(.init(url: "https://mcp.posthog.com/mcp")),
 ])
 func catalogAndInspectCommandsRoundTrip(command: ControlCommand) throws {
-    let data = try JSONEncoder.mcpm.encode(ControlRequest(id: 9, command: command))
-    let obj = try JSONSerialization.jsonObject(with: data) as! [String: Any]
-    #expect(obj["method"] as! String == command.method)
-    #expect(try JSONDecoder.mcpm.decode(ControlRequest.self, from: data).command == command)
+    #expect(try roundTrip(command, id: 9).command == command)
 }
 
 /// An app built before the check existed sends no `autoDetectAuth`, and gets it anyway.
@@ -243,7 +223,7 @@ func catalogAndInspectCommandsRoundTrip(command: ControlCommand) throws {
         + #""url":"https://mcp.posthog.com/mcp","auth":"none","clients":{}}"#
     let p = try JSONDecoder.mcpm.decode(AddServerParams.self, from: Data(json.utf8))
     #expect(p.autoDetectAuth)
-    #expect(try JSONDecoder.mcpm.decode(AddServerParams.self, from: JSONEncoder.mcpm.encode(p)) == p)
+    #expect(try roundTrip(p) == p)
 }
 
 @Test func catalogEntriesAndInspectionsSurviveTheWire() throws {
@@ -252,13 +232,12 @@ func catalogAndInspectCommandsRoundTrip(command: ControlCommand) throws {
                              auth: .oauth, homepage: "https://posthog.com", iconDomain: "posthog.com",
                              source: .bundled, official: true, verified: true)
     let result = ControlResult.catalog([entry])
-    #expect(try JSONDecoder.mcpm.decode(ControlResult.self, from: JSONEncoder.mcpm.encode(result)) == result)
+    #expect(try roundTrip(result) == result)
 
     let inspection = ControlResult.inspection(
         URLInspection(verdict: "notMCP", suggestion: "https://mcp.posthog.com/mcp",
                       detail: "not an MCP endpoint"))
-    #expect(try JSONDecoder.mcpm.decode(ControlResult.self,
-                                        from: JSONEncoder.mcpm.encode(inspection)) == inspection)
+    #expect(try roundTrip(inspection) == inspection)
 }
 
 /// A verdict this app has never heard of must not break the decode — it reads as "not one I know".

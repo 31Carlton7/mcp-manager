@@ -99,7 +99,6 @@ struct InspectorView: View {
                     .font(Typography.rowCaption)
                     .foregroundStyle(.secondary)
             } else {
-                // The compact row: an 11 pt medium label and a mini switch trailing.
                 ForEach(daemon.installedClients) { client in
                     Toggle(client.displayName, isOn: Binding(
                         get: { daemon.isEnabled(status.server, for: client.id) },
@@ -125,8 +124,8 @@ struct InspectorView: View {
         }
     }
 
-    /// The fixed label column: 52 pt, leading-aligned, with the value taking the remainder. Because
-    /// the column is absolute, nothing shifts sideways as one server is swapped for another.
+    /// The label column is absolute, so nothing shifts sideways as one server is swapped for
+    /// another.
     private func detailRow(_ label: String, @ViewBuilder value: () -> some View) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: Space.s) {
             Text(label)
@@ -251,8 +250,7 @@ struct InspectorView: View {
     @ViewBuilder private func gatewayCaption(_ status: ServerStatus) -> some View {
         if status.server.auth != .none {
             if let port = daemon.gatewayPort {
-                // demo capture only: the capture's daemon is on a scratch port so it cannot collide
-                // with the real one, but the screenshot is of what a normal install says.
+                // Demo capture only; see DemoCapture.swift.
                 let shown = DemoCapture.isActive ? Settings.defaultGatewayPort : port
                 Text("Clients will be pointed at the local gateway (localhost:\(String(shown))).")
                     .font(Typography.rowCaption)
@@ -389,9 +387,6 @@ struct InspectorView: View {
         }
     }
 
-    /// The last test for this server, if it has been tested since the app started. It stays until
-    /// the next test replaces it — a result is about a moment, and saying which moment is the
-    /// timing in it.
     @ViewBuilder private func testResult(_ status: ServerStatus) -> some View {
         if let result = daemon.testResults[status.server.id] {
             Text(result.ok ? summary(result) : failure(result))

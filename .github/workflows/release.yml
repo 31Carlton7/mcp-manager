@@ -16,9 +16,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The app targets macOS 26, so the build needs Xcode 26. Swapped in only when the image has
+      # it, so the workflow keeps working on an image where 26 is already the default.
       - name: Select Xcode
         run: |
-          # Pick the newest Xcode 26.x on the image; fail loudly if none (the app needs the 26 SDK).
           latest=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
           if [ -n "$latest" ]; then sudo xcode-select -s "$latest"; fi
           xcodebuild -version | grep -q "Xcode 26" || { echo "Xcode 26 not found on this runner"; ls /Applications | grep Xcode; exit 1; }
@@ -75,9 +76,8 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             build
 
-      # project.yml resolves CFBundleShortVersionString from $(MARKETING_VERSION), so the settings
-      # passed above are already in the bundle. Checked rather than assumed: a wrong version here
-      # ships silently.
+      # A CFBundleShortVersionString that does not resolve from the MARKETING_VERSION passed above
+      # would ship silently, so it is read back rather than assumed.
       - name: Check bundle version
         run: |
           BUILT=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP_PATH/Contents/Info.plist")
@@ -177,7 +177,7 @@ jobs:
             ${{ steps.dmg.outputs.dmg }}
             ${{ steps.dmg.outputs.dmg }}.sha256
 
-      # Secret: TAP_GITHUB_TOKEN, a token with write access to 31Carlton7/homebrew-tap.
+      # Secret: TAP_DEPLOY_KEY, an ed25519 private key with write access to 31Carlton7/homebrew-tap.
       # Homebrew/mcp-manager.rb in this repo is the source of the cask; the tap gets a copy with
       # the version and checksum of this release written in.
       - name: Update Homebrew cask

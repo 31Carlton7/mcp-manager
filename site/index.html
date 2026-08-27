@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MCP Manager for Mac — every MCP server, every client</title>
+<title>MCP Manager for Mac: every MCP server, every client</title>
 <meta name="description" content="One library of MCP servers for Claude Code, Claude Desktop, Cursor and Codex. Add a server once, toggle it per client, and the config files are written for you. Free and open source.">
-<meta property="og:title" content="MCP Manager for Mac — every MCP server, every client">
+<meta property="og:title" content="MCP Manager for Mac: every MCP server, every client">
 <meta property="og:description" content="One library of MCP servers for Claude Code, Claude Desktop, Cursor and Codex. Free and open source.">
 <meta property="og:url" content="https://mcpmanager.space/">
 <meta property="og:image" content="https://mcpmanager.space/assets/og.png">
@@ -20,7 +20,6 @@
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&family=Geist+Mono:wght@400&display=swap" rel="stylesheet">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  html { scroll-behavior: smooth; }
   body {
     font-family: "Geist", -apple-system, "system-ui", "Helvetica Neue", Arial, sans-serif;
     background: #fff;
@@ -160,7 +159,7 @@
   <h2 class="label">What MCP Manager does</h2>
 </section>
 <div class="media-band rail">
-  <img data-shot src="/assets/grid.png" alt="The MCP Manager library: every server in one grid, with a checkbox per client">
+  <img src="/assets/grid.png" alt="The MCP Manager library: every server in one grid, with a checkbox per client">
 </div>
 
 <section class="statement rail">
@@ -168,7 +167,7 @@
 </section>
 
 <div class="media-band spaced rail">
-  <video data-demo muted autoplay loop playsinline
+  <video muted autoplay loop playsinline
          src="/assets/demo-library.mp4"
          aria-label="Toggling a server on for a client and the config file updating"></video>
 </div>
@@ -177,16 +176,16 @@
   <div class="grid">
     <h3><b>One library, every client.</b> <span>Claude Code, Claude Desktop, Cursor and Codex read the files MCP Manager writes. It imports the servers you already have, backs up each file before it touches it, and changes nothing until you confirm the first import.</span></h3>
     <h3><b>Sign in once to remote servers.</b> <span>Notion, PostHog, anything with OAuth. A gateway on 127.0.0.1 injects the token on the way out and refreshes it before it expires, so all four clients share one sign-in. Tokens live in the Keychain.</span></h3>
-    <h3><b>Find it, add it, test it.</b> <span>Search the official MCP registry in the app and add from the catalog, or paste any URL, command or README JSON — the endpoint is validated and the auth type detected for you. Test any server's connection before you trust it.</span></h3>
+    <h3><b>Find it, add it, test it.</b> <span>Search the official MCP registry in the app and add from the catalog, or paste any URL, command or README JSON, and the endpoint is validated and the auth type detected for you. Test any server's connection before you trust it.</span></h3>
   </div>
 </section>
 
 <div class="media-band spaced rail">
-  <img data-shot src="/assets/popover.png" alt="The MCP Manager menu bar popover, with servers and their per-client state">
+  <img src="/assets/popover.png" alt="The MCP Manager menu bar popover, with servers and their per-client state">
 </div>
 
 <div class="media-band spaced rail">
-  <video data-demo muted autoplay loop playsinline
+  <video muted autoplay loop playsinline
          src="/assets/demo-signin.mp4"
          aria-label="Signing in to a remote MCP server once, and the state flipping to connected"></video>
 </div>
@@ -196,7 +195,7 @@
 </section>
 
 <div class="media-band spaced rail">
-  <video data-demo muted autoplay loop playsinline
+  <video muted autoplay loop playsinline
          src="/assets/demo-catalog.mp4"
          aria-label="Searching the MCP registry in the catalog and adding a server"></video>
 </div>
@@ -225,15 +224,6 @@
     navigator.clipboard.writeText(document.getElementById('brew').textContent);
     btn.textContent = 'Copied';
     setTimeout(() => { btn.textContent = 'Copy'; }, 1600);
-  }
-  // Screenshots ship with the first release; hide the band until a real image is there.
-  for (const img of document.querySelectorAll('[data-shot]')) {
-    const hide = () => { if (!img.naturalWidth || img.naturalWidth < 2) img.parentElement.hidden = true; };
-    img.complete ? hide() : (img.onload = hide, img.onerror = hide);
-  }
-  for (const v of document.querySelectorAll('[data-demo]')) {
-    v.parentElement.hidden = true;
-    v.addEventListener('loadedmetadata', () => { if (v.videoWidth > 1) v.parentElement.hidden = false; });
   }
 </script>
 

@@ -4,8 +4,8 @@ import Observation
 import MCPMCore
 import MCPMControl
 
-/// The app's view of the background service: connection state, the latest pushed status, and
-/// the commands the UI can issue.
+/// The app's view of the background service: connection state, the latest pushed status, and the
+/// commands the UI can issue.
 @MainActor @Observable
 final class DaemonClient {
     enum Connection: Equatable { case connecting, connected, disconnected(String) }
@@ -14,13 +14,15 @@ final class DaemonClient {
 
     private(set) var connection: Connection = .connecting
     private(set) var status: DaemonStatus?
+    /// The last command *we* sent that failed, as opposed to `status.lastError`, which is the
+    /// daemon's own last failure — a sync or write that went wrong with nobody watching.
     private(set) var lastError: String?
-    /// Toggles the user has flipped but the daemon hasn't confirmed yet, so a checkbox moves
-    /// under the pointer instead of waiting a round trip. Cleared by the status that follows,
-    /// or reverted if the command fails.
+    /// Toggles the user has flipped but the daemon hasn't confirmed yet, so a checkbox moves under
+    /// the pointer instead of waiting a round trip. Cleared by the status that follows, or
+    /// reverted if the command fails.
     private(set) var pendingToggles: [String: [ClientID: Bool]] = [:]
-    /// The last test connection result per server, kept until the next test replaces it. Not
-    /// persisted: a result describes the server as it was a moment ago, not as it is.
+    /// The last test result per server, kept until the next test replaces it and never persisted:
+    /// a result describes the server as it was a moment ago, not as it is.
     private(set) var testResults: [String: TestResult] = [:]
     /// Servers with a test in flight — the button's spinner, and the guard against a second one.
     private(set) var testing: Set<String> = []
@@ -28,7 +30,7 @@ final class DaemonClient {
     /// that arrives on every sync, and these change only when someone changes them.
     private(set) var settings: Settings?
     /// Why the last `settings.set` was refused, so the field can say so instead of silently
-    /// snapping back. Cleared when the next one is attempted.
+    /// snapping back.
     private(set) var settingsError: String?
     private(set) var savingSettings = false
 
@@ -47,7 +49,7 @@ final class DaemonClient {
     /// Whether the first import has been approved. Optimistic while we have no status: an app that
     /// opened setup every time it started before the daemon answered would flash it at everyone.
     var importConfirmed: Bool { status?.importConfirmed ?? true }
-    /// The daemon is reading and planning but writing nothing until setup is finished.
+    /// Until this clears, the daemon is reading and planning but writing nothing.
     var needsSetup: Bool { status != nil && !importConfirmed }
 
     var health: Health {
@@ -57,19 +59,16 @@ final class DaemonClient {
         return .ok
     }
 
-    /// The state to draw for one checkbox: what the user asked for, else what the daemon reports.
+    /// What the user asked for, else what the daemon reports.
     func isEnabled(_ server: Server, for client: ClientID) -> Bool {
         pendingToggles[server.id]?[client] ?? server.isEnabled(for: client)
     }
 
-    /// Whether any installed client has this server on — the popover's single switch.
     func isEnabledAnywhere(_ server: Server, installed: [ClientID]) -> Bool {
         installed.contains { isEnabled(server, for: $0) }
     }
 
-    // MARK: derived
-
-    /// The only clients the UI ever shows: the ones actually on this Mac.
+    /// The only clients the UI ever shows.
     var installedClients: [ClientStatus] { status?.clients.filter(\.installed) ?? [] }
 
     /// Every server, ordered for display. Deliberately unfiltered: a client filter names the client
@@ -79,8 +78,8 @@ final class DaemonClient {
         (status?.servers ?? []).sorted { $0.server.name.localizedStandardCompare($1.server.name) == .orderedAscending }
     }
 
-    /// Servers switched on in `filter`, or in any installed client when the filter is off.
-    /// Reads through the optimistic overlay so the number moves with the switch the user just flipped.
+    /// Servers switched on in `filter`, or in any installed client when the filter is off. Reads
+    /// through the optimistic overlay so the number moves with the switch the user just flipped.
     func activeCount(filter: ClientID?) -> Int {
         let servers = status?.servers ?? []
         guard let filter else {
@@ -90,23 +89,19 @@ final class DaemonClient {
         return servers.count { isEnabled($0.server, for: filter) }
     }
 
-    /// Everything asking for a human: servers waiting on a sign-in or stuck on an auth error, plus
-    /// clients the daemon can't write to.
     var attentionCount: Int {
         guard let s = status else { return 0 }
         return s.servers.count { AuthStatus($0.state).needsAttention }
             + s.clients.count { $0.installed && !$0.healthy }
     }
 
-    /// The most recent sync across installed clients — the footer's "Synced HH:mm".
     var lastSynced: Date? { installedClients.compactMap(\.lastSync).max() }
 
     private struct Queued {
         let command: ControlCommand
         /// Overlay entries this command owns, reverted if it fails.
         let keys: [(server: String, client: ClientID)]
-        /// Set for the commands whose answer the UI needs — a sign-in URL, a test result. Left nil
-        /// by the fire-and-forget ones, which are the majority.
+        /// Set only for the commands whose answer the UI needs — a sign-in URL, a test result.
         let reply: CheckedContinuation<ControlResult, Error>?
     }
 
@@ -116,8 +111,7 @@ final class DaemonClient {
     /// waits on the authorization server, a test that dials the server itself. On the ordered
     /// connection those would hold every toggle behind them.
     private let aux: ControlClient
-    /// The in-flight or settled connect for the aux link, shared by everyone who needs it, and nil
-    /// whenever the link is down.
+    /// The in-flight or settled connect for the aux link, shared by every caller, nil when down.
     private var auxConnect: Task<Void, Error>?
     /// Which aux connection is current. A drain or a failed send only takes the link down if it is
     /// still talking about the connection we actually have.
@@ -162,7 +156,8 @@ final class DaemonClient {
                     continue
                 }
                 if case .status(let s) = try await client.send(.subscribe) { apply(s) }
-                // events() is per-connection and finishes when the socket drops → loop ends → reconnect
+                // events() is per-connection and finishes when the socket drops, which is what
+                // ends this loop and brings us back round to reconnect.
                 for await ev in await client.events() {
                     if case .status(let s) = ev { apply(s) }
                 }
@@ -218,20 +213,16 @@ final class DaemonClient {
 
     func remove(_ id: String) { run(.removeServer(.init(id: id))) }
 
-    /// Adds and waits, answering with the new server's id — which the daemon mints and only
-    /// reports through the status that follows, so it is found again as the server that wasn't
-    /// there before. The Add sheet needs it to offer the sign-in a fresh OAuth server waits on.
+    /// Adds and waits, answering with the new server's id — which the daemon mints and only reports
+    /// through the status that follows, so it is found again as the server that wasn't there
+    /// before. The Add sheet needs it to offer the sign-in a fresh OAuth server waits on.
     ///
     /// On the aux link, because the daemon may inspect the URL on its way in and that dials the
-    /// internet: on the ordered connection a slow endpoint would hold every toggle behind it for
-    /// as long as the probe takes. `auxSend`'s status barrier still puts this after every mutation
-    /// issued before it.
+    /// internet.
     @discardableResult
     func addAwaiting(_ p: AddServerParams) async throws -> String? {
         let existing = Set((status?.servers ?? []).map(\.id))
         _ = try await auxSend(.addServer(p), retryOnDroppedLink: false)
-        // The add syncs, so a status is already on its way; asking closes the gap in which the
-        // sheet would look for a server the app has not been told about yet.
         if case .status(let s) = try await send(.status) { apply(s) }
         // By id and name both: nothing stops two servers sharing a name, and the one that matters
         // is the one this call brought into being.
@@ -247,8 +238,8 @@ final class DaemonClient {
         return i
     }
 
-    /// Curated list plus the registry. Also slow — it may go to the network — so also on the aux
-    /// link, where a search per keystroke can't hold up a toggle.
+    /// Curated list plus the registry. Also on the aux link: it may go to the network, and a search
+    /// per keystroke must not hold up a toggle.
     func searchCatalog(query: String, limit: Int = 30) async throws -> [CatalogEntry] {
         guard case .catalog(let entries) = try await auxSend(.catalogSearch(.init(query: query, limit: limit))) else {
             throw ControlClientError.remote("The background service did not answer with a catalog")
@@ -294,8 +285,8 @@ final class DaemonClient {
         run(.authSetHeader(.init(id: id, name: name, value: value)))
     }
 
-    /// Runs an MCP `initialize` against the server the way its clients reach it. Concurrent tests of
-    /// the same server are dropped rather than queued: the second would only re-answer the first.
+    /// Runs an MCP `initialize` against the server the way its clients reach it. A second test of
+    /// the same server is dropped rather than queued: it would only re-answer the first.
     func test(_ id: String) async {
         guard !testing.contains(id) else { return }
         testing.insert(id)
@@ -311,8 +302,7 @@ final class DaemonClient {
 
     // MARK: onboarding
 
-    /// What the first sync would do, without doing any of it. Throws with the daemon's own words,
-    /// which the sheet shows rather than an Import button that would act on nothing.
+    /// What the first sync would do, without doing any of it.
     func importPreview() async throws -> SyncPreview {
         guard case .syncPreview(let p) = try await send(.syncPreview) else {
             throw ControlClientError.remote("The background service did not return a preview")
@@ -325,27 +315,25 @@ final class DaemonClient {
     func confirmImport() async -> Bool {
         do {
             _ = try await send(.confirmImport)
-            // The import writes files, so a status push is coming — but asking for one closes the
-            // window in which the sheet's last step still reads as unconfirmed.
             if case .status(let s) = try await send(.status) { apply(s) }
             return true
         } catch {
-            lastError = reason(error)
+            lastError = Self.reason(error)
             return false
         }
     }
 
     // MARK: settings
 
-    /// Idempotent, and safe to call from `onAppear`: a failure leaves `settings` nil, which the
-    /// view reads as "not loaded yet" and shows a disabled field for.
+    /// Safe to call from `onAppear`: a failure leaves `settings` nil, which the view reads as
+    /// "not loaded yet" and shows a disabled field for.
     func loadSettings() async {
         guard case .settings(let s)? = try? await send(.getSettings) else { return }
         settings = s
     }
 
-    /// Saves the fields it is given and leaves the rest alone. Returns false when the daemon
-    /// refused, with `settingsError` carrying its reason.
+    /// Saves the fields it is given and leaves the rest alone. False when the daemon refused, with
+    /// `settingsError` carrying its reason.
     @discardableResult
     func saveSettings(gatewayPort: Int? = nil, backupRetention: Int? = nil) async -> Bool {
         settingsError = nil
@@ -359,29 +347,28 @@ final class DaemonClient {
             if case .status(let s) = try await send(.status) { apply(s) }
             return true
         } catch {
-            settingsError = reason(error)
+            settingsError = Self.reason(error)
             return false
         }
     }
 
     /// The daemon's own words for a refusal; anything else is a transport failure and gets the
     /// generic description, since there is no sentence in it worth showing on its own.
-    private func reason(_ error: Error) -> String {
+    static func reason(_ error: any Error) -> String {
         if case ControlClientError.remote(let why) = error { return why }
         return String(describing: error)
     }
 
     // MARK: demo capture only
 
-    /// Pulls a status rather than waiting for one. The capture driver changes the credential store
-    /// from outside the daemon, which is not a change anything on that side would push.
+    /// The capture driver changes the credential store from outside the daemon, which is not a
+    /// change anything on that side would push, so the status has to be pulled.
     func _demoRefreshStatus() async {
         guard DemoCapture.isActive, case .status(let s)? = try? await send(.status) else { return }
         apply(s)
     }
 
-    /// A test result without dialling anything. `testResults` is otherwise only written by `test`,
-    /// and this is the one caller that isn't a real probe.
+    /// A test result without dialling anything.
     func _demoInjectTestResult(_ id: String, _ result: TestResult) {
         guard DemoCapture.isActive else { return }
         testResults[id] = result
@@ -430,9 +417,9 @@ final class DaemonClient {
         return try await aux.send(cmd)
     }
 
-    /// Connects the aux link if it isn't up, with concurrent callers sharing the one attempt:
-    /// `ControlClient.connect()` closes whatever is open before dialling, so two of them racing
-    /// would tear each other's connection down and neither would settle.
+    /// Concurrent callers share the one attempt: `ControlClient.connect()` closes whatever is open
+    /// before dialling, so two of them racing would tear each other's connection down and neither
+    /// would settle.
     private func auxReady() async throws {
         let connect = auxConnect ?? startAuxConnect()
         do {

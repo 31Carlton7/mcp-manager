@@ -107,6 +107,8 @@ public enum IconSource: Equatable, Sendable {
         return String(name.first.map { String($0) } ?? "?").uppercased()
     }
 
+    /// FNV-1a rather than `hashValue`, whose seed changes every process: a monogram that changed
+    /// colour on each launch would read as a different server.
     public static func hue(_ name: String) -> Int {
         var h: UInt32 = 2166136261
         for b in name.utf8 { h = (h ^ UInt32(b)) &* 16777619 }

@@ -1,22 +1,19 @@
 #!/bin/bash
 # Renders every image and clip on mcpmanager.space out of the app itself.
 #
-# There is no Screen Recording permission anywhere in this project, so nothing here photographs the
-# screen: the app draws its own window into a bitmap (`NSView.cacheDisplay`, see
-# Apps/MCPManager/Sources/DemoCapture.swift) and writes the frames out. This script only stages the
-# world that app sees, starts it, and hands the frames to ffmpeg.
-#
-# The world is a scratch home under /private/tmp: the real ~/.mcpm/servers.json is copied in so the
-# grid shows real servers, but the daemon and the app both run with HOME pointed there, on their own
-# socket and their own gateway port. The copy that is actually installed — app, daemon, login item,
-# client configs — is never touched, and this script kills nothing it did not start itself.
-#
 #   scripts/render-site-media.sh
 #
-# Leave the Mac alone while it runs (about two minutes) — but leave it *unlocked*: the app has to
-# come to the front and stay there, and nothing can be frontmost behind the lock screen. An inactive
-# window draws its controls in the inactive grey and never animates its inspector open, so the run
-# refuses to write anything rather than hand the site a set of assets that look almost right.
+# Nothing here photographs the screen: the project holds no Screen Recording permission, so the app
+# draws its own window into a bitmap (Apps/MCPManager/Sources/DemoCapture.swift). This script stages
+# the world that app sees, starts it, and hands the frames to ffmpeg.
+#
+# That world is a scratch HOME under /private/tmp, on its own socket and gateway port. The installed
+# copy (app, daemon, login item, client configs) is never touched, and only the two processes this
+# script started are ever killed.
+#
+# Leave the Mac alone while it runs (about two minutes), and leave it unlocked: an app that is not
+# frontmost draws its controls in the inactive grey and never animates the inspector open. Behind
+# the lock screen the run fails instead of writing assets that look almost right.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 REPO="$PWD"
@@ -31,15 +28,11 @@ APP="$REPO/Apps/MCPManager/build/Build/Products/Debug/MCPManager.app"
 command -v "$FFMPEG" >/dev/null || { echo "ffmpeg not found at $FFMPEG" >&2; exit 1; }
 [ -f "$HOME/.mcpm/servers.json" ] || { echo "no ~/.mcpm/servers.json to copy from" >&2; exit 1; }
 
-# ---------------------------------------------------------------- build
-
 echo "── building"
 swift build --product mcpmd
 ( cd Apps/MCPManager && xcodegen generate -q && \
   xcodebuild -scheme MCPManager -configuration Debug -derivedDataPath build build >/dev/null )
 [ -x "$APP/Contents/MacOS/MCPManager" ] || { echo "no app at $APP" >&2; exit 1; }
-
-# ---------------------------------------------------------------- scratch world
 
 echo "── staging $SCRATCH"
 rm -rf "$SCRATCH"
@@ -62,14 +55,12 @@ cat > "$HOME_DIR/.mcpm/settings.json" <<EOF
 }
 EOF
 
-# Every supported client, so the cards show four chips and the popover counts four clients. These
-# are the files the scratch daemon syncs to; the real ones are in the real home and out of reach.
+# Every supported client, so the cards show four chips and the popover counts four clients.
 #
-# They are written with the servers the library says are on for each client, because that is what a
-# real install looks like from the daemon's side: a server the library has on for a client but that
-# is missing from that client's file is one the user deleted by hand, and the first sync would
-# faithfully turn it off. The bodies only have to be recognisable — the sync matches on the name
-# first and rewrites each file properly on its first pass.
+# Each file is seeded with the servers the library says are on for that client: a server the library
+# has on but that is missing from the client's file reads as one the user deleted by hand, and the
+# first sync would faithfully turn it off. The bodies only have to be recognisable, since the sync
+# matches on name and rewrites each file properly on its first pass.
 python3 - "$HOME_DIR" <<'PY'
 import json, os, sys
 home = sys.argv[1]
@@ -136,10 +127,7 @@ PY
 chmod 600 "$HOME_DIR/.mcpm/tokens.json" "$HOME_DIR/.mcpm/tokens.signed-in.json" \
           "$HOME_DIR/.mcpm/tokens.signed-out.json"
 
-# ---------------------------------------------------------------- run
-
-# Only ever the two processes this script started. The user's own app and daemon are running right
-# now and must survive this untouched.
+# Only ever the two processes this script started: the user's own app and daemon must survive it.
 cleanup() {
   [ -n "${DAEMON_PID:-}" ] && kill "$DAEMON_PID" 2>/dev/null || true
   [ -n "${APP_PID:-}" ] && kill "$APP_PID" 2>/dev/null || true
@@ -177,8 +165,6 @@ done
 
 cleanup
 trap - EXIT
-
-# ---------------------------------------------------------------- encode
 
 mkdir -p site/assets docs/img
 

@@ -13,21 +13,19 @@ extension DaemonClient.Health {
     }
 }
 
-/// The status item itself. Menu bar images are template-rendered, so the tint can be ignored;
-/// the badge is what reliably carries a warning or an error into the menu bar.
+/// The status item itself. Menu bar images are template-rendered, so a tint would be dropped; the
+/// badge is what reliably carries a warning or an error into the menu bar.
 struct MenuBarLabel: View {
     @Environment(DaemonClient.self) private var daemon
     @Environment(StartupSettings.self) private var startup
     @Environment(\.openWindow) private var openWindow
 
-    /// Once per launch. A user who closes the setup window has said "not now" for this run; the
-    /// popover's row and the window's banner are what keep asking after that.
+    /// Once per launch. The popover's row and the window's banner keep asking after that.
     @State private var offeredSetup = false
 
     var body: some View {
-        // A template PDF (Resources/Assets.xcassets/MenuBarIcon, drawn by
-        // scripts/render-menubar-icon.swift): macOS recolours it for the bar's appearance, like the
-        // system glyphs beside it. Health is a small dot at the bottom-right corner, hidden when ok.
+        // A template PDF: macOS recolours it for the bar's appearance, like the system glyphs
+        // beside it.
         Image("MenuBarIcon")
             .renderingMode(.template)
             .resizable()
@@ -69,8 +67,6 @@ struct MenuBarLabel: View {
 struct MenuBarView: View {
     private enum Tab: String, CaseIterable { case servers = "Servers", clients = "Clients" }
 
-    /// Fixed width, 12 pt of frame padding, and so a 308 pt content column. Nothing inside reflows,
-    /// which is what makes the absolute column widths below safe.
     private static let width: CGFloat = 332
     /// What sits above and below the scroll region — header, heroes, tabs, footer — budgeted as a
     /// constant so the list can take everything the screen has left and no more.
@@ -101,9 +97,8 @@ struct MenuBarView: View {
 
     // MARK: header
 
-    /// A fixed-height band, 28 pt of content inside 4 pt of vertical padding, with a leading slot
-    /// and a trailing icon button. We leave the middle empty on purpose: the observed pattern puts
-    /// a brand mark here, and our identity is the menu bar icon.
+    /// Spec adjustment: the observed pattern puts a brand mark in the middle of this band, and our
+    /// identity is the menu bar icon, so the middle is left empty.
     private var header: some View {
         GlassEffectContainer(spacing: Space.s) {
             HStack(spacing: Space.s) {
@@ -114,7 +109,7 @@ struct MenuBarView: View {
                         .lineLimit(1)
                         .help(why)
                 } else {
-                    filterMenu
+                    ClientFilterMenu(clients: daemon.installedClients, selection: $filter)
                 }
                 Spacer(minLength: Space.s)
                 settingsMenu
@@ -122,27 +117,6 @@ struct MenuBarView: View {
             .frame(height: 28)
         }
         .padding(.vertical, Space.xs)
-    }
-
-    private var filterMenu: some View {
-        Menu {
-            Button("All clients") { filter = nil }
-            ForEach(daemon.installedClients) { client in
-                Button(client.displayName) { filter = client.id }
-            }
-        } label: {
-            Text(filterLabel).font(Typography.rowTitle)
-        }
-        .menuStyle(.button)
-        .buttonStyle(.glass)
-        .buttonBorderShape(.capsule)
-        .fixedSize()
-        .accessibilityLabel("Client filter")
-    }
-
-    private var filterLabel: String {
-        guard let filter else { return "All clients" }
-        return daemon.installedClients.first { $0.id == filter }?.displayName ?? filter.rawValue
     }
 
     /// Everything that isn't about a single server: opening the window, and quitting the app
@@ -178,7 +152,7 @@ struct MenuBarView: View {
         .animation(.snappy(duration: 0.2), value: daemon.isConnected)
     }
 
-    /// Setup lives in the main window — this is the one line of it the popover carries, since the
+    /// Setup lives in the main window; this is the one line of it the popover carries, since the
     /// hero numbers above read as zero for a reason the user is owed.
     @ViewBuilder private var setupRow: some View {
         if daemon.needsSetup {
@@ -226,8 +200,6 @@ struct MenuBarView: View {
         .animation(.snappy(duration: 0.2), value: daemon.isConnected)
     }
 
-    /// The chrome is a constant; the list gets whatever the screen has left, and never less than
-    /// 80 pt. With one client configured the popover ends up genuinely short.
     private static var listMaxHeight: CGFloat {
         let available = NSScreen.main?.visibleFrame.height ?? 800
         return max(80, available - chrome)
@@ -241,8 +213,8 @@ struct MenuBarView: View {
             .padding(.vertical, Space.s)
     }
 
-    /// Each row is its own plate, and the columns inside it are fixed: a 22 pt icon column, a
-    /// flexible name, and a trailing control that always lands in the same place.
+    /// A fixed 22 pt icon column and a trailing control that always lands in the same place, so
+    /// rows line up down the list whatever their names are.
     private func serverRow(_ st: ServerStatus) -> some View {
         HStack(spacing: 9) {
             ServerIcon(server: st.server, size: 22)
@@ -285,8 +257,7 @@ struct MenuBarView: View {
     }
 
     /// One switch, two meanings: with no filter it is the master switch for every installed
-    /// client, and under a filter it is that client's flag. Both read through the optimistic
-    /// overlay so the switch moves under the pointer.
+    /// client, and under a filter it is that client's flag.
     private func enabled(_ server: Server) -> Binding<Bool> {
         if let filter {
             Binding(get: { daemon.isEnabled(server, for: filter) },
@@ -328,8 +299,6 @@ struct MenuBarView: View {
         if let err = daemon.lastError {
             NoticeBanner(err, tint: Semantic.red, limit: 3)
         }
-        // The daemon's own last failure — a sync or write that went wrong with nobody watching —
-        // as opposed to the command we just sent.
         if let err = daemon.status?.lastError {
             NoticeBanner("Background service: \(err)", tint: Semantic.orange, limit: 3)
         }

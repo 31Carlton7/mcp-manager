@@ -47,6 +47,33 @@ private final class FakeInspector: @unchecked Sendable {
     }
 }
 
+private extension Handlers {
+    @discardableResult
+    func send(_ command: ControlCommand) async throws -> ControlResult {
+        try await handle(ControlRequest(id: 1, command: command))
+    }
+
+    func currentSettings() async throws -> Settings {
+        guard case .settings(let s) = try await send(.getSettings) else {
+            throw HandlerError.invalid("expected settings")
+        }
+        return s
+    }
+}
+
+private func tempRoot(_ tag: String) throws -> URL {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("mcpm-\(tag)-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    return root
+}
+
+/// An auth manager whose OAuth client cannot reach anything.
+private func offlineAuth(store: FileTokenStore) -> AuthManager {
+    AuthManager(store: store, oauth: OAuthClient(http: OfflineHTTP()),
+                redirectURI: GatewayConfig(port: 7337).redirectURI())
+}
+
 private struct Env {
     let root: URL
     let store: FileTokenStore
@@ -59,27 +86,25 @@ private struct Env {
 private func makeEnv(runningPort: Int = 7337, initial: Settings = Settings(),
                      inspector: FakeInspector = FakeInspector(),
                      catalog: CatalogService? = nil) async throws -> Env {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent("mcpm-h-\(UUID().uuidString)")
-    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let root = try tempRoot("h")
     let coord = SyncCoordinator(store: Store(url: root.appendingPathComponent("servers.json")),
                                 adapters: [], backups: BackupStore(root: root.appendingPathComponent("backups")),
                                 gatewayPort: 7337)
     try await coord.runOnce()
 
     let store = FileTokenStore(url: root.appendingPathComponent("tokens.json"))
-    let auth = AuthManager(store: store, oauth: OAuthClient(http: OfflineHTTP()),
-                           redirectURI: GatewayConfig(port: 7337).redirectURI())
     let settings = SettingsStore(url: root.appendingPathComponent("settings.json"))
     let service = SettingsService(store: settings, initial: initial, runningPort: runningPort,
                                   applyRetention: { keep in await coord.setBackupRetention(keep) })
     return Env(root: root, store: store, coord: coord, settings: settings,
-               handlers: Handlers(coord: coord, auth: auth, gatewayPort: nil, settings: service,
+               handlers: Handlers(coord: coord, auth: offlineAuth(store: store),
+                                  gatewayPort: nil, settings: service,
                                   catalog: catalog, inspect: inspector.inspect),
                inspector: inspector)
 }
 
 private func add(_ p: AddServerParams, to handlers: Handlers) async throws {
-    #expect(try await handlers.handle(ControlRequest(id: 1, command: .addServer(p))) == .ack)
+    #expect(try await handlers.send(.addServer(p)) == .ack)
 }
 
 private func remoteServer(name: String, auth: AuthKind) -> AddServerParams {
@@ -101,7 +126,7 @@ private func record(_ token: String) -> TokenRecord {
     #expect(await state(of: "acme", in: e.handlers) == "needsAuth")
 
     let set = ControlCommand.authSetHeader(.init(id: "acme", name: "X-Api-Key", value: "s3cret"))
-    #expect(try await e.handlers.handle(ControlRequest(id: 2, command: set)) == .ack)
+    #expect(try await e.handlers.send(set) == .ack)
     #expect(await state(of: "acme", in: e.handlers) == "connected")
     #expect(try e.store.header(for: "acme")?.value == "s3cret")
 }
@@ -118,11 +143,11 @@ private func record(_ token: String) -> TokenRecord {
     let e = try await makeEnv()
     try await add(remoteServer(name: "acme", auth: .header), to: e.handlers)
     let set = ControlCommand.authSetHeader(.init(id: "acme", name: "X-Api-Key", value: "s3cret"))
-    _ = try await e.handlers.handle(ControlRequest(id: 2, command: set))
+    _ = try await e.handlers.send(set)
     try e.store.setClientRegistration(
         ClientRegistration(clientID: "c", issuer: URL(string: "https://as.example.dev")!), for: "acme")
 
-    #expect(try await e.handlers.handle(ControlRequest(id: 3, command: .removeServer(.init(id: "acme")))) == .ack)
+    #expect(try await e.handlers.send(.removeServer(.init(id: "acme"))) == .ack)
     #expect(try e.store.header(for: "acme") == nil)
     #expect(try e.store.token(for: "acme") == nil)
     #expect(try e.store.clientRegistration(for: "acme") == nil)
@@ -135,7 +160,7 @@ private func record(_ token: String) -> TokenRecord {
     #expect(await state(of: "acme", in: e.handlers) == "connected")
 
     let update = ControlCommand.updateServer(.init(id: "acme", auth: AuthKind.none))
-    #expect(try await e.handlers.handle(ControlRequest(id: 2, command: update)) == .ack)
+    #expect(try await e.handlers.send(update) == .ack)
     #expect(try e.store.token(for: "acme") == nil)
     #expect(await state(of: "acme", in: e.handlers) == "none")
 }
@@ -146,7 +171,7 @@ private func record(_ token: String) -> TokenRecord {
     try e.store.setToken(record("keep"), for: "acme")
 
     let update = ControlCommand.updateServer(.init(id: "acme", name: "Acme Corp"))
-    #expect(try await e.handlers.handle(ControlRequest(id: 2, command: update)) == .ack)
+    #expect(try await e.handlers.send(update) == .ack)
     #expect(try e.store.token(for: "acme")?.accessToken == "keep")
 }
 
@@ -158,7 +183,7 @@ func aHeaderThatCannotGoOnTheWireIsRejected(name: String, value: String) async t
 
     let set = ControlCommand.authSetHeader(.init(id: "acme", name: name, value: value))
     await #expect(throws: HandlerError.self) {
-        try await e.handlers.handle(ControlRequest(id: 2, command: set))
+        try await e.handlers.send(set)
     }
     #expect(try e.store.header(for: "acme") == nil)
 }
@@ -169,7 +194,7 @@ func aHeaderThatCannotGoOnTheWireIsRejected(name: String, value: String) async t
 
     let set = ControlCommand.authSetHeader(.init(id: "acme", name: "X-Api-Key", value: "v"))
     await #expect(throws: HandlerError.self) {
-        try await e.handlers.handle(ControlRequest(id: 2, command: set))
+        try await e.handlers.send(set)
     }
 }
 
@@ -199,7 +224,7 @@ func anAddWithAnUnsendableHeaderAddsNothingAtAll(name: String, value: String) as
     p.headerValue = value
 
     await #expect(throws: HandlerError.self) {
-        try await e.handlers.handle(ControlRequest(id: 1, command: .addServer(p)))
+        try await e.handlers.send(.addServer(p))
     }
     #expect(await e.handlers.status().servers.isEmpty)
     #expect(try e.store.header(for: "acme") == nil)
@@ -212,7 +237,7 @@ func anAddWithAnUnsendableHeaderAddsNothingAtAll(name: String, value: String) as
     p.headerValue = "v"
 
     await #expect(throws: HandlerError.self) {
-        try await e.handlers.handle(ControlRequest(id: 1, command: .addServer(p)))
+        try await e.handlers.send(.addServer(p))
     }
     #expect(await e.handlers.status().servers.isEmpty)
 }
@@ -224,7 +249,7 @@ func anAddWithAnUnsendableHeaderAddsNothingAtAll(name: String, value: String) as
     try await add(remoteServer(name: "plain", auth: .none), to: e.handlers)
 
     let update = ControlCommand.updateServer(.init(id: "plain", headers: ["X-Trace": "on"]))
-    #expect(try await e.handlers.handle(ControlRequest(id: 2, command: update)) == .ack)
+    #expect(try await e.handlers.send(update) == .ack)
     #expect(await e.handlers.status().servers.first?.server.headers == ["X-Trace": "on"])
 }
 
@@ -232,7 +257,7 @@ func anAddWithAnUnsendableHeaderAddsNothingAtAll(name: String, value: String) as
     let e = try await makeEnv()
     try await add(remoteServer(name: "acme", auth: .oauth), to: e.handlers)
 
-    let result = try await e.handlers.handle(ControlRequest(id: 2, command: .testServer(.init(id: "acme"))))
+    let result = try await e.handlers.send(.testServer(.init(id: "acme")))
     guard case .testResult(let r) = result else { Issue.record("expected a test result"); return }
     #expect(!r.ok)
     #expect(r.error == "gateway not running")
@@ -242,17 +267,14 @@ func anAddWithAnUnsendableHeaderAddsNothingAtAll(name: String, value: String) as
 
 @Test func settingsGetReturnsTheDefaultsUntilSomethingIsSaved() async throws {
     let e = try await makeEnv()
-    guard case .settings(let s) = try await e.handlers.handle(ControlRequest(id: 1, command: .getSettings)) else {
-        Issue.record("expected settings"); return
-    }
-    #expect(s == Settings())
+    #expect(try await e.handlers.currentSettings() == Settings())
     #expect(await e.handlers.status().settingsPendingRestart == false)
 }
 
 @Test func settingsSetSavesAndAnswersWithTheStoredValue() async throws {
     let e = try await makeEnv()
     let cmd = ControlCommand.setSettings(.init(gatewayPort: 9001, backupRetention: 9))
-    guard case .settings(let s) = try await e.handlers.handle(ControlRequest(id: 1, command: cmd)) else {
+    guard case .settings(let s) = try await e.handlers.send(cmd) else {
         Issue.record("expected settings"); return
     }
     #expect(s.gatewayPort == 9001)
@@ -265,7 +287,7 @@ func anAddWithAnUnsendableHeaderAddsNothingAtAll(name: String, value: String) as
 /// one is recorded and applied on the next start rather than rebound underneath them.
 @Test func changingTheGatewayPortAsksForARestartWithoutMovingTheRunningOne() async throws {
     let e = try await makeEnv(runningPort: 7337)
-    _ = try await e.handlers.handle(ControlRequest(id: 1, command: .setSettings(.init(gatewayPort: 9001))))
+    _ = try await e.handlers.send(.setSettings(.init(gatewayPort: 9001)))
 
     let status = await e.handlers.status()
     #expect(status.settingsPendingRestart)
@@ -276,10 +298,10 @@ func anAddWithAnUnsendableHeaderAddsNothingAtAll(name: String, value: String) as
 /// Setting the port back to the one that is running is not a pending change.
 @Test func settingTheGatewayPortBackToTheRunningOneClearsTheRestartFlag() async throws {
     let e = try await makeEnv(runningPort: 7337)
-    _ = try await e.handlers.handle(ControlRequest(id: 1, command: .setSettings(.init(gatewayPort: 9001))))
+    _ = try await e.handlers.send(.setSettings(.init(gatewayPort: 9001)))
     #expect(await e.handlers.status().settingsPendingRestart)
 
-    _ = try await e.handlers.handle(ControlRequest(id: 2, command: .setSettings(.init(gatewayPort: 7337))))
+    _ = try await e.handlers.send(.setSettings(.init(gatewayPort: 7337)))
     let status = await e.handlers.status()
     #expect(status.settingsPendingRestart == false)
     #expect(status.lastError == nil)
@@ -288,7 +310,7 @@ func anAddWithAnUnsendableHeaderAddsNothingAtAll(name: String, value: String) as
 /// Retention has no such problem: it only decides what the next write prunes.
 @Test func changingBackupRetentionTakesEffectWithoutARestart() async throws {
     let e = try await makeEnv()
-    _ = try await e.handlers.handle(ControlRequest(id: 1, command: .setSettings(.init(backupRetention: 2))))
+    _ = try await e.handlers.send(.setSettings(.init(backupRetention: 2)))
     #expect(await e.coord.backups.keep == 2)
     #expect(await e.handlers.status().settingsPendingRestart == false)
 }
@@ -297,7 +319,7 @@ func anAddWithAnUnsendableHeaderAddsNothingAtAll(name: String, value: String) as
 func settingsSetRefusesAPortOutsideTheValidRange(port: Int) async throws {
     let e = try await makeEnv()
     await #expect(throws: HandlerError.self) {
-        try await e.handlers.handle(ControlRequest(id: 1, command: .setSettings(.init(gatewayPort: port))))
+        try await e.handlers.send(.setSettings(.init(gatewayPort: port)))
     }
     // A refused set leaves nothing behind — not in memory and not on disk.
     #expect(await e.handlers.status().settingsPendingRestart == false)
@@ -307,7 +329,7 @@ func settingsSetRefusesAPortOutsideTheValidRange(port: Int) async throws {
 @Test func settingsSetRefusesANegativeBackupRetention() async throws {
     let e = try await makeEnv()
     await #expect(throws: HandlerError.self) {
-        try await e.handlers.handle(ControlRequest(id: 1, command: .setSettings(.init(backupRetention: -1))))
+        try await e.handlers.send(.setSettings(.init(backupRetention: -1)))
     }
 }
 
@@ -316,21 +338,16 @@ func settingsSetRefusesAPortOutsideTheValidRange(port: Int) async throws {
     let e = try await makeEnv()
     let bad = ControlCommand.setSettings(.init(gatewayPort: 9001, backupRetention: -3))
     await #expect(throws: HandlerError.self) {
-        try await e.handlers.handle(ControlRequest(id: 1, command: bad))
+        try await e.handlers.send(bad)
     }
-    guard case .settings(let s) = try await e.handlers.handle(ControlRequest(id: 2, command: .getSettings)) else {
-        Issue.record("expected settings"); return
-    }
-    #expect(s == Settings())
+    #expect(try await e.handlers.currentSettings() == Settings())
 }
 
 /// A patch is partial: the field the caller left out keeps its stored value.
 @Test func aPatchOnlyChangesTheFieldsItCarries() async throws {
     let e = try await makeEnv(initial: Settings(gatewayPort: 8080, backupRetention: 7))
-    _ = try await e.handlers.handle(ControlRequest(id: 1, command: .setSettings(.init(backupRetention: 3))))
-    guard case .settings(let s) = try await e.handlers.handle(ControlRequest(id: 2, command: .getSettings)) else {
-        Issue.record("expected settings"); return
-    }
+    _ = try await e.handlers.send(.setSettings(.init(backupRetention: 3)))
+    let s = try await e.handlers.currentSettings()
     #expect(s.gatewayPort == 8080)
     #expect(s.backupRetention == 3)
 }
@@ -358,7 +375,7 @@ private struct ImportEnv {
 
 /// Two real JSON adapters over temporary files, and a daemon holding its first import.
 private func makeImportEnv(importConfirmed: Bool = false) async throws -> ImportEnv {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent("mcpm-i-\(UUID().uuidString)")
+    let root = try tempRoot("i")
     try FileManager.default.createDirectory(at: root.appendingPathComponent("cursor"), withIntermediateDirectories: true)
     let cursor = CursorAdapter(configPath: root.appendingPathComponent("cursor/mcp.json"))
     let claude = ClaudeCodeAdapter(configPath: root.appendingPathComponent("claude.json"))
@@ -366,9 +383,7 @@ private func makeImportEnv(importConfirmed: Bool = false) async throws -> Import
     let coord = SyncCoordinator(store: library, adapters: [cursor, claude],
                                 backups: BackupStore(root: root.appendingPathComponent("backups")),
                                 gatewayPort: 7337, readOnly: !importConfirmed)
-    let auth = AuthManager(store: FileTokenStore(url: root.appendingPathComponent("tokens.json")),
-                           oauth: OAuthClient(http: OfflineHTTP()),
-                           redirectURI: GatewayConfig(port: 7337).redirectURI())
+    let auth = offlineAuth(store: FileTokenStore(url: root.appendingPathComponent("tokens.json")))
     let settings = SettingsStore(url: root.appendingPathComponent("settings.json"))
     let service = SettingsService(store: settings, initial: Settings(importConfirmed: importConfirmed),
                                   runningPort: 7337)
@@ -386,7 +401,7 @@ private func writeConflictingConfigs(_ e: ImportEnv) throws {
 }
 
 private func preview(_ handlers: Handlers) async throws -> SyncPreview {
-    guard case .syncPreview(let p) = try await handlers.handle(ControlRequest(id: 1, command: .syncPreview)) else {
+    guard case .syncPreview(let p) = try await handlers.send(.syncPreview) else {
         throw HandlerError.invalid("expected a preview")
     }
     return p
@@ -479,7 +494,7 @@ private func preview(_ handlers: Handlers) async throws -> SyncPreview {
     let e = try await makeImportEnv()
     try writeConflictingConfigs(e)
 
-    #expect(try await e.handlers.handle(ControlRequest(id: 1, command: .confirmImport)) == .ack)
+    #expect(try await e.handlers.send(.confirmImport) == .ack)
 
     let status = await e.handlers.status()
     #expect(status.importConfirmed)
@@ -503,12 +518,12 @@ private func preview(_ handlers: Handlers) async throws -> SyncPreview {
     let add = ControlCommand.addServer(AddServerParams(name: "acme", kind: .remote,
                                                        url: "https://mcp.example.dev/mcp"))
     await #expect(throws: SyncCoordinatorError.readOnly) {
-        try await e.handlers.handle(ControlRequest(id: 1, command: add))
+        try await e.handlers.send(add)
     }
     #expect(SyncCoordinatorError.readOnly.description.contains("setup is not finished"))
 
-    _ = try await e.handlers.handle(ControlRequest(id: 2, command: .confirmImport))
-    #expect(try await e.handlers.handle(ControlRequest(id: 3, command: add)) == .ack)
+    _ = try await e.handlers.send(.confirmImport)
+    #expect(try await e.handlers.send(add) == .ack)
     #expect(await e.handlers.status().servers.map(\.id) == ["acme"])
 }
 
@@ -517,8 +532,8 @@ private func preview(_ handlers: Handlers) async throws -> SyncPreview {
     let e = try await makeImportEnv(importConfirmed: true)
     try Data(#"{"mcpServers":{"a":{"command":"x"}}}"#.utf8).write(to: e.cursor.configPath)
 
-    _ = try await e.handlers.handle(ControlRequest(id: 1, command: .confirmImport))
-    _ = try await e.handlers.handle(ControlRequest(id: 2, command: .confirmImport))
+    _ = try await e.handlers.send(.confirmImport)
+    _ = try await e.handlers.send(.confirmImport)
     #expect(await e.handlers.status().servers.map(\.id) == ["a"])
     #expect(await e.handlers.status().importConfirmed)
 }
@@ -597,7 +612,7 @@ private func inspection(_ verdict: GatewayInspection.Verdict, transport: Transpo
     let params = AddServerParams(name: "PostHog", kind: .remote,
                                  url: "https://posthog.com/docs/model-context-protocol")
     let failure = await #expect(throws: HandlerError.self) {
-        try await e.handlers.handle(ControlRequest(id: 1, command: .addServer(params)))
+        try await e.handlers.send(.addServer(params))
     }
     #expect(String(describing: failure).contains("https://mcp.posthog.com/mcp"))
     // Nothing was added, so nothing has to be cleaned up.
@@ -682,7 +697,7 @@ private func inspection(_ verdict: GatewayInspection.Verdict, transport: Transpo
     let e = try await makeEnv(inspector: inspector)
 
     let command = ControlCommand.inspectURL(.init(url: "https://posthog.com/docs/model-context-protocol"))
-    let result = try await e.handlers.handle(ControlRequest(id: 1, command: command))
+    let result = try await e.handlers.send(command)
     guard case .inspection(let found) = result else { Issue.record("expected an inspection"); return }
     #expect(found.parsedVerdict == .notMCP)
     #expect(found.suggestion == "https://mcp.posthog.com/mcp")
@@ -692,7 +707,7 @@ private func inspection(_ verdict: GatewayInspection.Verdict, transport: Transpo
 @Test func somethingThatIsNotAURLIsRejectedBeforeAnythingIsDialled() async throws {
     let e = try await makeEnv()
     await #expect(throws: HandlerError.self) {
-        try await e.handlers.handle(ControlRequest(id: 1, command: .inspectURL(.init(url: "not a url"))))
+        try await e.handlers.send(.inspectURL(.init(url: "not a url")))
     }
     #expect(e.inspector.askedURLs.isEmpty)
 }
@@ -700,14 +715,12 @@ private func inspection(_ verdict: GatewayInspection.Verdict, transport: Transpo
 // MARK: - The catalog over the wire
 
 @Test func catalogSearchAnswersWithEntries() async throws {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent("mcpm-cat-\(UUID().uuidString)")
-    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let root = try tempRoot("cat")
     let catalog = CatalogService(bundled: BundledCatalog.entries, http: OfflineHTTP(),
                                  cacheURL: root.appendingPathComponent("catalog-cache.json"))
     let e = try await makeEnv(catalog: catalog)
 
-    let result = try await e.handlers.handle(
-        ControlRequest(id: 1, command: .catalogSearch(.init(query: "posthog"))))
+    let result = try await e.handlers.send(.catalogSearch(.init(query: "posthog")))
     guard case .catalog(let entries) = result else { Issue.record("expected a catalog"); return }
     #expect(entries.first?.slug == "posthog")
     #expect(entries.first?.auth == .oauth)
@@ -716,7 +729,7 @@ private func inspection(_ verdict: GatewayInspection.Verdict, transport: Transpo
 @Test func catalogSearchSaysSoWhenThereIsNoCatalog() async throws {
     let e = try await makeEnv()
     await #expect(throws: HandlerError.self) {
-        try await e.handlers.handle(ControlRequest(id: 1, command: .catalogSearch(.init(query: "x"))))
+        try await e.handlers.send(.catalogSearch(.init(query: "x")))
     }
 }
 
@@ -727,13 +740,13 @@ private func inspection(_ verdict: GatewayInspection.Verdict, transport: Transpo
 func onlyHTTPURLsAreInspected(raw: String) async throws {
     let e = try await makeEnv()
     await #expect(throws: HandlerError.self) {
-        try await e.handlers.handle(ControlRequest(id: 1, command: .inspectURL(.init(url: raw))))
+        try await e.handlers.send(.inspectURL(.init(url: raw)))
     }
     #expect(e.inspector.askedURLs.isEmpty)
 
     let params = AddServerParams(name: "Odd", kind: .remote, url: raw)
     await #expect(throws: HandlerError.self) {
-        try await e.handlers.handle(ControlRequest(id: 2, command: .addServer(params)))
+        try await e.handlers.send(.addServer(params))
     }
     #expect(await e.coord.currentLibrary().servers.isEmpty)
     #expect(e.inspector.askedURLs.isEmpty)

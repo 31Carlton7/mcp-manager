@@ -1,4 +1,5 @@
 import Testing
+import Foundation
 @testable import MCPMCore
 
 @Test func clientIDsAreStableStrings() {
@@ -8,8 +9,6 @@ import Testing
     #expect(ClientID.codex.rawValue == "codex")
     #expect(ClientID.allCases.count == 4)
 }
-
-import Foundation
 
 @Test func serverRoundTripsThroughJSONWithClientMatrixAsObject() throws {
     let s = Server(id: "notion", name: "Notion", kind: .remote, url: "https://mcp.notion.com/mcp",

@@ -2,10 +2,9 @@ import Testing
 import Foundation
 @testable import MCPMGateway
 
-/// The redirect refusal cannot be exercised through `FakeHTTPClient` — it lives in URLSession's
-/// delegate callback, below the `HTTPClient` protocol. Driving it end to end would need a real
-/// listening socket, which belongs with the Hummingbird-backed gateway tests in Task 4; here we
-/// invoke the delegate the way URLSession does.
+/// The redirect refusal lives in URLSession's delegate callback, below the `HTTPClient` protocol,
+/// so `FakeHTTPClient` cannot reach it. Driving it end to end would need a real listening socket;
+/// this invokes the delegate the way URLSession does.
 @Test func theSessionDelegateRefusesToFollowRedirects() async throws {
     let delegate = NoRedirectDelegate()
     let response = HTTPURLResponse(url: URL(string: "https://as.example/token")!, statusCode: 302,

@@ -66,12 +66,6 @@ public struct AuthorizationServerMetadata: Codable, Equatable, Sendable {
             registrationEndpoint: originURL(issuer, path: "/register"))
     }
 
-    /// Whether the server advertises PKCE S256. Absent metadata means "assume yes" — S256 is
-    /// mandatory for MCP clients, and a server that ignores the parameter still works.
-    public var supportsS256: Bool {
-        codeChallengeMethodsSupported?.contains("S256") ?? true
-    }
-
     /// Every endpoint we might send a request to, for transport checks.
     public var endpoints: [URL] {
         [authorizationEndpoint, tokenEndpoint, registrationEndpoint, revocationEndpoint].compactMap { $0 }

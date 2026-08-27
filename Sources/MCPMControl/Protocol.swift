@@ -172,14 +172,12 @@ public enum ControlCommand: Equatable, Sendable {
     case hello(HelloParams)
     case status
     case subscribe
-    case listServers
     case addServer(AddServerParams)
     case updateServer(UpdateServerParams)
     case removeServer(IDParams)
     case setClient(SetClientParams)
     case setAll(SetAllParams)
     case testServer(IDParams)
-    case listClients
     case reimport(ClientParams)
     case authStart(IDParams)
     case authSignOut(IDParams)
@@ -201,14 +199,12 @@ public enum ControlCommand: Equatable, Sendable {
         case .hello: "hello"
         case .status: "status"
         case .subscribe: "subscribe"
-        case .listServers: "servers.list"
         case .addServer: "servers.add"
         case .updateServer: "servers.update"
         case .removeServer: "servers.remove"
         case .setClient: "servers.setClient"
         case .setAll: "servers.setAll"
         case .testServer: "servers.test"
-        case .listClients: "clients.list"
         case .reimport: "clients.reimport"
         case .authStart: "auth.start"
         case .authSignOut: "auth.signOut"
@@ -239,14 +235,12 @@ public struct ControlRequest: Codable, Equatable, Sendable {
         case "hello": command = .hello(try c.decode(HelloParams.self, forKey: .params))
         case "status": command = .status
         case "subscribe": command = .subscribe
-        case "servers.list": command = .listServers
         case "servers.add": command = .addServer(try c.decode(AddServerParams.self, forKey: .params))
         case "servers.update": command = .updateServer(try c.decode(UpdateServerParams.self, forKey: .params))
         case "servers.remove": command = .removeServer(try c.decode(IDParams.self, forKey: .params))
         case "servers.setClient": command = .setClient(try c.decode(SetClientParams.self, forKey: .params))
         case "servers.setAll": command = .setAll(try c.decode(SetAllParams.self, forKey: .params))
         case "servers.test": command = .testServer(try c.decode(IDParams.self, forKey: .params))
-        case "clients.list": command = .listClients
         case "clients.reimport": command = .reimport(try c.decode(ClientParams.self, forKey: .params))
         case "auth.start": command = .authStart(try c.decode(IDParams.self, forKey: .params))
         case "auth.signOut": command = .authSignOut(try c.decode(IDParams.self, forKey: .params))
@@ -281,7 +275,7 @@ public struct ControlRequest: Codable, Equatable, Sendable {
         case .setSettings(let p): try c.encode(p, forKey: .params)
         case .catalogSearch(let p): try c.encode(p, forKey: .params)
         case .inspectURL(let p): try c.encode(p, forKey: .params)
-        case .status, .subscribe, .listServers, .listClients, .getSettings, .syncPreview, .confirmImport: break
+        case .status, .subscribe, .getSettings, .syncPreview, .confirmImport: break
         }
     }
 }
@@ -386,8 +380,6 @@ public enum ControlResult: Codable, Equatable, Sendable {
     case ack
     case hello(daemonVersion: String, apiVersion: Int)
     case status(DaemonStatus)
-    case servers([Server])
-    case clients([ClientStatus])
     /// Where the user's browser has to go to finish a sign-in. The daemon does not open it: the
     /// app does, so the browser belongs to the logged-in GUI session.
     case authorizeURL(String)

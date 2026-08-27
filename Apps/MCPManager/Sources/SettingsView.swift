@@ -2,15 +2,15 @@ import SwiftUI
 import ServiceManagement
 import MCPMCore
 
-/// The Settings scene: what starts on its own, and the state of the thing that does the work.
-/// Everything here is either a login-item switch or a read-only fact about the daemon — the
-/// server library is the main window's job.
+/// What starts on its own, and the state of the thing that does the work. Everything here is
+/// either a login-item switch or a read-only fact about the daemon; the server library is the main
+/// window's job.
 struct SettingsView: View {
     @Environment(DaemonClient.self) private var daemon
     @Environment(StartupSettings.self) private var startup
 
-    /// True while either service button is working — both talk to the same launchd job, so
-    /// neither should be pressable while the other is mid-flight.
+    /// Both service buttons talk to the same launchd job, so neither is pressable while the other
+    /// is mid-flight.
     @State private var busy = false
     /// The field's own value. Seeded from the daemon's saved settings and left alone after that,
     /// so a status arriving mid-edit can't retype what the user is halfway through.

@@ -5,7 +5,6 @@ import NIOExtras
 import MCPMCore
 
 public enum ControlServerError: Error, Equatable {
-    case unsupported(String)
     case socketPermissions(Int32)
 }
 

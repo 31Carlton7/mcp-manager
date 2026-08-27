@@ -2,10 +2,15 @@ import Testing
 import Foundation
 @testable import MCPMCore
 
-@Test func watcherFiresOnceForBurstOfWritesAndOnAtomicRename() async throws {
+/// A config path inside a fresh temp directory that already exists.
+private func makeConfigPath() throws -> URL {
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent("mcpm-w-\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-    let file = dir.appendingPathComponent("mcp.json")
+    return dir.appendingPathComponent("mcp.json")
+}
+
+@Test func watcherFiresOnceForBurstOfWritesAndOnAtomicRename() async throws {
+    let file = try makeConfigPath()
     try Data("a".utf8).write(to: file)
 
     let watcher = FileWatcher(paths: [.cursor: file], debounce: .milliseconds(200))
@@ -54,9 +59,7 @@ import Foundation
 }
 
 @Test func watcherStartIsIdempotent() async throws {
-    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("mcpm-w-\(UUID().uuidString)")
-    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-    let file = dir.appendingPathComponent("mcp.json")
+    let file = try makeConfigPath()
     try Data("a".utf8).write(to: file)
 
     let watcher = FileWatcher(paths: [.cursor: file], debounce: .milliseconds(50))
@@ -67,9 +70,7 @@ import Foundation
 }
 
 @Test func watcherReArmsWithoutAccumulatingSources() async throws {
-    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("mcpm-w-\(UUID().uuidString)")
-    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-    let file = dir.appendingPathComponent("mcp.json")
+    let file = try makeConfigPath()
 
     let watcher = FileWatcher(paths: [.cursor: file], debounce: .milliseconds(50))
     _ = watcher.start()

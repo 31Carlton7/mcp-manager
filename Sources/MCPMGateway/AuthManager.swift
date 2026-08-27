@@ -129,7 +129,9 @@ public actor AuthManager {
         // any; a server that advertises nothing is not asked to understand the parameter.
         let resource = discovery.prm?.resource
 
-        dropPending { $0.id == id || self.now().timeIntervalSince($0.createdAt) > Self.pendingTTL }
+        pending = pending.filter {
+            $0.value.id != id && now().timeIntervalSince($0.value.createdAt) <= Self.pendingTTL
+        }
         pending[state] = Pending(id: id, verifier: verifier, asMeta: discovery.asMeta,
                                  registration: registration, resource: resource, createdAt: now())
 
@@ -190,9 +192,9 @@ public actor AuthManager {
     /// After an upstream 401: refresh regardless of what the stored expiry claims. A grant the
     /// server has already rejected is deleted, so the UI can ask for a new sign-in.
     ///
-    /// `rejectedAccessToken` is the token the caller actually sent. If the stored one has moved on
-    /// since — a concurrent request refreshed while this one was in flight — the newer token is
-    /// handed back as-is rather than spending a second (single-use, rotating) refresh token.
+    /// `rejectedAccessToken` is the token the caller actually sent. A stored token that has moved
+    /// on since — a concurrent request refreshed while this one was in flight — is handed back
+    /// as it stands.
     public func forceRefresh(id: String, rejectedAccessToken: String? = nil) async throws -> String {
         guard let record = try storedToken(id) else { throw AuthError.needsAuth(id: id) }
         if let rejected = rejectedAccessToken, record.accessToken != rejected { return record.accessToken }
@@ -285,11 +287,5 @@ public actor AuthManager {
 
     public func header(for id: String) throws -> HeaderSecret? {
         do { return try store.header(for: id) } catch { throw AuthError.storeUnavailable("\(error)") }
-    }
-
-    // MARK: -
-
-    private func dropPending(_ isStale: (Pending) -> Bool) {
-        for (state, entry) in pending where isStale(entry) { pending[state] = nil }
     }
 }

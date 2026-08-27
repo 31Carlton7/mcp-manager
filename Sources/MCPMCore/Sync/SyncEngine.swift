@@ -27,10 +27,8 @@ public enum SyncEngine {
         var lib = input.library
         var adopted: [Server] = []
 
-        // 1 + 2: import unknown servers, mark presence.
-        // Suppressed clients (we just wrote them this round) skip this whole step: their
-        // snapshot is stale by definition, so it must not adopt or disable anything — it's
-        // projection-only in the next step.
+        // Import, then presence: steps 1 and 2 of the sync algorithm in
+        // docs/superpowers/specs/2026-08-17-mcp-manager-design.md §7. Suppressed clients skip both.
         for (client, external) in input.snapshots.sorted(by: { $0.key < $1.key }) {
             if input.suppressed.contains(client) { continue }
             var seenIDs = Set<String>()
@@ -62,7 +60,7 @@ public enum SyncEngine {
             }
         }
 
-        // 3 + 4: project and diff
+        // Steps 3 and 4: project the library out, write only where it differs.
         var writes: [ClientID: [ExternalServer]] = [:]
         for (client, current) in input.snapshots {
             let desired = lib.servers.filter { $0.isEnabled(for: client) }

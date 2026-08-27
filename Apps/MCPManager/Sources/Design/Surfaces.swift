@@ -1,12 +1,13 @@
 import SwiftUI
+import MCPMCore
+import MCPMControl
 
-// The vocabulary built on top of the tokens: the surfaces, the two or three repeated composites,
-// and the one button style. Everything is small on purpose — a modifier, or a view that is only
-// layout and type.
+// The vocabulary built on top of the tokens: the surfaces, the repeated composites, and the one
+// button style.
 
 extension View {
-    /// The workhorse. Card-tier fill plus the shared hairline, at the card radius — grid cards,
-    /// catalog plates, inspector groups, the onboarding choice rows.
+    /// Card-tier fill plus the shared hairline — grid cards, catalog plates, inspector groups, the
+    /// onboarding choice rows.
     ///
     /// Spec adjustment, twice over. The design called for `glassEffect` here; glass samples and
     /// refracts whatever is behind it every frame, and the grid scrolls dozens of these at once, so
@@ -59,9 +60,8 @@ extension View {
         }
     }
 
-    /// A footer action: half the row, minimum height 28, card fill under the shell's heavier
-    /// hairline, 11 pt medium secondary content that shrinks before it truncates. The footer never
-    /// carries a primary action, and this is what says so.
+    /// A footer action: half the row, card fill under the shell's heavier hairline, content that
+    /// shrinks before it truncates. The footer never carries a primary action, and this says so.
     func footerAction() -> some View {
         font(Typography.value)
             .foregroundStyle(.secondary)
@@ -84,8 +84,7 @@ private func cardBorder(selected: Bool, hovering: Bool) -> Color {
     return hovering ? .primary.opacity(0.18) : Surface.hairline
 }
 
-/// Press feedback for the small pressable things — chips, mostly, where `.plain` gives none. The
-/// scale is skipped under Reduce Motion; the dimming still confirms the press.
+/// Press feedback for the small pressable things — chips, mostly, where `.plain` gives none.
 struct PressableButtonStyle: ButtonStyle {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -103,8 +102,7 @@ extension ButtonStyle where Self == PressableButtonStyle {
     static var pressable: PressableButtonStyle { PressableButtonStyle() }
 }
 
-/// A rule between blocks *inside* one card. Cards themselves are separated by the 12 pt gutter, not
-/// by rules.
+/// A rule between blocks *inside* one card. Cards themselves are separated by the gutter.
 struct Hairline: View {
     var body: some View {
         Rectangle()
@@ -114,8 +112,6 @@ struct Hairline: View {
     }
 }
 
-/// 10 pt uppercase semibold at +0.5, secondary. The most repeated typographic gesture in the app
-/// and the one that makes the popover, the window, the sheets and Settings read as one system.
 struct SectionLabel: View {
     private let text: String
 
@@ -130,12 +126,35 @@ struct SectionLabel: View {
     }
 }
 
-/// A status in the semantic hue: a 7 pt dot carrying the only shadow in the design — 2 pt of its
-/// own colour at 0.6, which is what keeps it legible against a translucent card.
+/// Neutral by default, and hued only where the hue means something — in which case it also takes
+/// the stroked form.
+struct MicroBadge: View {
+    let text: String
+    var tint: Color?
+
+    var body: some View {
+        Text(text.uppercased())
+            .font(Typography.microBadge)
+            .tracking(Typography.microBadgeTracking)
+            .lineLimit(1)
+            .foregroundStyle(tint ?? .secondary)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1.5)
+            .background(tint?.opacity(0.16) ?? Color.primary.opacity(0.08), in: .capsule)
+            .overlay {
+                if let tint {
+                    Capsule().strokeBorder(tint.opacity(0.35), lineWidth: 0.5)
+                }
+            }
+    }
+}
+
+/// A status in the semantic hue, carrying the only shadow in the design — 2 pt of its own colour,
+/// which is what keeps it legible against a translucent card.
 struct StatusDot: View {
     var tint: Color
     var size: CGFloat = 7
-    /// The glow is dropped in dense rows, where dots sit close enough to bleed into each other.
+    /// Dropped in dense rows, where dots sit close enough to bleed into each other.
     var glow: Bool = true
 
     var body: some View {
@@ -146,9 +165,8 @@ struct StatusDot: View {
     }
 }
 
-/// The labelled form of the dot: label and dot both in the hue, on a capsule filled with the hue at
-/// 0.13. `compact` is the card-chip size — the same construction one step down, because four of
-/// these have to fit across a 220 pt card.
+/// The labelled form of the dot. `compact` is the card-chip size, because four of these have to fit
+/// across a 220 pt card.
 struct StatusPill: View {
     let text: String
     var tint: Color
@@ -230,9 +248,73 @@ struct HeroNumber: View {
     }
 }
 
-/// The navigation strip: equal-width text segments at 2 pt spacing inside a card-tier container
-/// with 4 pt of padding. The active segment takes the accent foreground over the accent tint;
-/// inactive ones recede rather than draw anything of their own.
+/// The glass search pill in the window header and above the catalog.
+struct SearchField: View {
+    let prompt: String
+    @Binding var text: String
+    /// Shown in place of the clear button while a search is in flight.
+    var loading: Bool = false
+    /// A fixed width for the text field, for the header, where the pill is `fixedSize`d and the
+    /// field would otherwise collapse to the prompt. Left nil the field fills what it is given.
+    var fieldWidth: CGFloat?
+
+    var body: some View {
+        HStack(spacing: Space.xs) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            TextField(prompt, text: $text)
+                .textFieldStyle(.plain)
+                .font(Typography.field)
+                .frame(minWidth: fieldWidth.map { _ in 70 }, idealWidth: fieldWidth,
+                       maxWidth: fieldWidth)
+            if loading {
+                ProgressView().controlSize(.mini)
+            } else if !text.isEmpty {
+                Button { text = "" } label: {
+                    Image(systemName: "xmark.circle.fill").font(.system(size: 11))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .accessibilityLabel("Clear search")
+            }
+        }
+        .padding(.horizontal, Space.s)
+        .padding(.vertical, 5)
+        .pill()
+    }
+}
+
+/// The "All clients / …" filter, in the popover header and the window header both.
+struct ClientFilterMenu: View {
+    let clients: [ClientStatus]
+    @Binding var selection: ClientID?
+
+    var body: some View {
+        Menu {
+            Button("All clients") { selection = nil }
+            ForEach(clients) { client in
+                Button(client.displayName) { selection = client.id }
+            }
+        } label: {
+            Text(label).font(Typography.rowTitle)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.glass)
+        .buttonBorderShape(.capsule)
+        .fixedSize()
+        .accessibilityLabel("Client filter")
+    }
+
+    private var label: String {
+        guard let selection else { return "All clients" }
+        return clients.first { $0.id == selection }?.displayName ?? selection.rawValue
+    }
+}
+
+/// The navigation strip: equal-width text segments inside a card-tier container. The active segment
+/// takes the accent foreground over the accent tint; inactive ones recede rather than draw anything
+/// of their own.
 struct TabStrip<Value: Hashable>: View {
     private let options: [Value]
     private let title: (Value) -> String
@@ -256,10 +338,10 @@ struct TabStrip<Value: Hashable>: View {
                     Text(title(option))
                         .font(.system(size: 13.5, weight: .semibold))
                         .foregroundStyle(active ? Color.accentColor : Color.secondary.opacity(0.86))
-                        // The segment's own margin. `maxWidth: .infinity` is what makes the segments
-                        // equal inside a strip that has width to give — but under `fixedSize`, as in
-                        // the main window's header, infinity resolves to the label's ideal width and
-                        // the tint would end exactly where the word does.
+                        // `maxWidth: .infinity` is what makes the segments equal inside a strip that
+                        // has width to give — but under `fixedSize`, as in the main window's header,
+                        // infinity resolves to the label's ideal width and the tint would end
+                        // exactly where the word does. Hence the horizontal padding as well.
                         .padding(.horizontal, Space.card)
                         .frame(maxWidth: .infinity)
                         .frame(height: 30)

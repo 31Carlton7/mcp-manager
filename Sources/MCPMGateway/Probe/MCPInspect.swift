@@ -79,29 +79,12 @@ extension MCPProbe {
     static let maxInspectedEvents = 16
     static let maxInspectedStreamBytes = 64 * 1024
 
-    static func inspectSession(timeout: Duration) -> URLSession {
-        let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForRequest = seconds(timeout)
-        config.timeoutIntervalForResource = seconds(timeout)
-        config.httpShouldSetCookies = false
-        config.urlCache = nil
-        // A redirect is a fact worth reporting — `https://host/sse` answering 308 is how a server
-        // says its endpoint moved — and chasing it would hide that behind whatever it landed on.
-        return URLSession(configuration: config, delegate: NoRedirectDelegate(), delegateQueue: nil)
-    }
-
     /// POSTs an `initialize` and reads what comes back as a statement about what this URL is.
     static func checkHTTP(_ session: URLSession, _ url: URL) async -> EndpointCheck {
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = encode(initializeMessage())
-
         let http: HTTPURLResponse
         let object: [String: Any]?
         do {
-            (http, object) = try await send(session, request, expecting: 1)
+            (http, object) = try await send(session, request(url, message: initializeMessage()), expecting: 1)
         } catch {
             return .unreachable((error as NSError).localizedDescription)
         }
@@ -166,6 +149,9 @@ extension MCPProbe {
             return .notEndpoint(status: nil, contentType: nil, location: nil, detail: "not an HTTP response")
         }
         let contentType = http.value(forHTTPHeaderField: "Content-Type")
+        func notEndpoint(_ detail: String) -> EndpointCheck {
+            .notEndpoint(status: http.statusCode, contentType: contentType, location: nil, detail: detail)
+        }
         var reply = Reply(status: http.statusCode, contentType: contentType)
         if http.statusCode == 401 || http.statusCode == 403 {
             reply.authRequired = true
@@ -173,15 +159,13 @@ extension MCPProbe {
             reply.detail = "MCP endpoint, needs sign-in"
             // Only a server that says it serves a stream: everything else answers 401 to a GET too.
             guard contentType?.lowercased().contains("text/event-stream") == true else {
-                return .notEndpoint(status: http.statusCode, contentType: contentType, location: nil,
-                                    detail: "refused the request")
+                return notEndpoint("refused the request")
             }
             return .endpoint(.sse, reply)
         }
         guard (200...299).contains(http.statusCode),
               contentType?.lowercased().contains("text/event-stream") == true else {
-            return .notEndpoint(status: http.statusCode, contentType: contentType, location: nil,
-                                detail: "answered HTTP \(http.statusCode)")
+            return notEndpoint("answered HTTP \(http.statusCode)")
         }
         do {
             // The `endpoint` event comes first in any server that sends one. Reading on past a
@@ -196,16 +180,13 @@ extension MCPProbe {
                 events += 1
                 read += event.data.reduce(0) { $0 + $1.utf8.count }
                 guard events < Self.maxInspectedEvents, read < Self.maxInspectedStreamBytes else {
-                    return .notEndpoint(status: http.statusCode, contentType: contentType, location: nil,
-                                        detail: "the stream named no message endpoint")
+                    return notEndpoint("the stream named no message endpoint")
                 }
             }
         } catch {
-            return .notEndpoint(status: http.statusCode, contentType: contentType, location: nil,
-                                detail: (error as NSError).localizedDescription)
+            return notEndpoint((error as NSError).localizedDescription)
         }
-        return .notEndpoint(status: http.statusCode, contentType: contentType, location: nil,
-                            detail: "the stream named no message endpoint")
+        return notEndpoint("the stream named no message endpoint")
     }
 
     // MARK: - Auth
@@ -300,7 +281,7 @@ extension MCPProbe {
     static func suggestion(for url: URL, redirect: URL?, timeout: Duration) async -> URL? {
         let candidates = candidateURLs(for: url, redirect: redirect)
         guard !candidates.isEmpty else { return nil }
-        let session = inspectSession(timeout: timeout)
+        let session = session(timeout: timeout)
         defer { session.invalidateAndCancel() }
         for candidate in candidates {
             let check = candidate.path.hasSuffix("/sse")
@@ -323,7 +304,7 @@ extension MCPProbe {
     }
 
     static func inspectImpl(url: URL, timeout: Duration) async -> URLInspection {
-        let session = inspectSession(timeout: timeout)
+        let session = session(timeout: timeout)
         defer { session.invalidateAndCancel() }
         let metadata = URLSessionHTTPClient(timeout: seconds(timeout))
 
@@ -373,13 +354,7 @@ extension MCPProbe {
     /// show and never a reason to fail an inspection.
     static func toolCount(_ session: URLSession, url: URL, sessionID: String?) async -> Int? {
         func request(_ message: [String: Any]) -> URLRequest {
-            var request = URLRequest(url: url)
-            request.httpMethod = "POST"
-            request.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            if let sessionID { request.setValue(sessionID, forHTTPHeaderField: "Mcp-Session-Id") }
-            request.httpBody = encode(message)
-            return request
+            Self.request(url, message: message, sessionID: sessionID)
         }
         _ = try? await send(session, request(initializedNotification), expecting: nil)
         guard let (http, object) = try? await send(session, request(toolsListMessage), expecting: 2),

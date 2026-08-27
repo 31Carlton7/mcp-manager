@@ -46,14 +46,14 @@ enum CodexTOMLSplicer {
             switch s.string {
             case .multiBasic:
                 if c[i] == "\\" { i += 2 }                              // escape, incl. line-ending backslash
-                else if matches(c, i, "\"\"\"") { s.string = .none; i += 3 }
+                else if c[i...].starts(with: "\"\"\"") { s.string = .none; i += 3 }
                 else { i += 1 }
             case .multiLiteral:
-                if matches(c, i, "'''") { s.string = .none; i += 3 } else { i += 1 }
+                if c[i...].starts(with: "'''") { s.string = .none; i += 3 } else { i += 1 }
             case .none:
                 if c[i] == "#" { return s }                             // comment runs to end of line
-                if matches(c, i, "\"\"\"") { s.string = .multiBasic; i += 3 }
-                else if matches(c, i, "'''") { s.string = .multiLiteral; i += 3 }
+                if c[i...].starts(with: "\"\"\"") { s.string = .multiBasic; i += 3 }
+                else if c[i...].starts(with: "'''") { s.string = .multiLiteral; i += 3 }
                 else if c[i] == "\"" || c[i] == "'" { i = endOfSingleLineString(c, from: i) }
                 else {
                     if c[i] == "[" || c[i] == "{" { s.depth += 1 }
@@ -75,13 +75,6 @@ enum CodexTOMLSplicer {
             j += 1
         }
         return j
-    }
-
-    private static func matches(_ c: [Character], _ i: Int, _ token: String) -> Bool {
-        let t = Array(token)
-        guard i + t.count <= c.count else { return false }
-        for (offset, ch) in t.enumerated() where c[i + offset] != ch { return false }
-        return true
     }
 
     // MARK: - Headers and keys

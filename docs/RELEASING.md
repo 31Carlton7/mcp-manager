@@ -18,7 +18,12 @@ time setup that workflow depends on, plus what to check after a release.
 
 ## Secrets
 
-Five repository secrets, at **Settings → Secrets and variables → Actions → New repository secret**.
+Six repository secrets, at **Settings → Secrets and variables → Actions → New repository secret**.
+
+`scripts/set-signing-secrets.sh` sets three of them (`MACOS_CERT_P12`, `MACOS_CERT_PASSWORD` and
+`APPLE_APP_PASSWORD`) from a Mac that already holds the certificate, and
+`scripts/verify-and-set-app-password.sh` checks an app-specific password against Apple before
+storing it. `APPLE_ID`, `APPLE_TEAM_ID` and `TAP_DEPLOY_KEY` you set yourself.
 
 ### `MACOS_CERT_P12` and `MACOS_CERT_PASSWORD`
 
@@ -65,17 +70,19 @@ xcrun notarytool history --apple-id "<email>" --team-id "<TEAMID>" --password "<
 
 ### `TAP_DEPLOY_KEY`
 
-A token that can push to the Homebrew tap.
+An SSH deploy key that can push to the Homebrew tap. A deploy key rather than a personal access
+token: it reaches that one repository and nothing else, and it does not expire out from under a
+release.
 
 1. Create the repo **`31Carlton7/homebrew-tap`** (public, that name exactly, so that
    `brew install --cask 31carlton7/tap/mcp-manager` resolves). A `Casks/` directory is enough;
    the workflow creates it if it is missing.
-2. Create a token that can write to it. Either a fine-grained personal access token scoped to that
-   one repository with **Contents: Read and write**, or a classic token with `repo`. Fine-grained
-   tokens expire, so put a reminder somewhere for the expiry date.
-3. Save it as `TAP_DEPLOY_KEY` in **this** repository's Actions secrets.
+2. Generate a key pair: `ssh-keygen -t ed25519 -N "" -f tapkey`.
+3. Add `tapkey.pub` under the tap's **Settings → Deploy keys**, with "Allow write access" ticked.
+4. Store the private half on **this** repository: `gh secret set TAP_DEPLOY_KEY < tapkey`. Delete
+   both local files afterwards.
 
-The workflow clones the tap with `x-access-token:$TAP_GITHUB_TOKEN`, copies
+The workflow writes the key into `$RUNNER_TEMP`, clones the tap over SSH, copies
 `Homebrew/mcp-manager.rb` from this repo over `Casks/mcp-manager.rb`, rewrites the `version` and
 `sha256` lines, and pushes. `Homebrew/mcp-manager.rb` here is the source of truth for the cask, so
 edit it here rather than in the tap.
@@ -84,8 +91,8 @@ edit it here rather than in the tap.
 
 1. Bump `MCPMVersion.current` in `Sources/MCPMCore/Version.swift` and `MARKETING_VERSION` in
    `Apps/MCPManager/project.yml` to the version you are about to tag.
-2. Update `CHANGELOG.md`: rename the `Unreleased` heading to the version and today's date, and add
-   a link at the bottom.
+2. Update `CHANGELOG.md`: add a section for the version with today's date, and a link at the
+   bottom.
 3. Commit, then tag and push:
 
    ```
@@ -93,9 +100,10 @@ edit it here rather than in the tap.
    git push origin v0.1.0
    ```
 
-4. Watch the **Release** workflow. It runs `swift test` before it builds, so a failing suite stops
-   the release instead of shipping past it. Notarization is the slow step; `notarytool submit --wait`
-   usually returns in a few minutes but can take longer when Apple is busy.
+4. Watch the **Release** workflow. It runs the suite in debug and in release before it builds, so
+   a failing test stops the release instead of shipping past it. Notarization is the slow step;
+   `notarytool submit --wait` usually returns in a few minutes but can take longer when Apple is
+   busy.
 5. Verify from a clean Mac (or at least a different one):
 
    ```
@@ -152,15 +160,11 @@ without a secure timestamp, or hardened runtime missing on one of the two signat
 
 ## Checking the tap credential
 
-The release pushes the updated cask over SSH with a deploy key (`TAP_DEPLOY_KEY`), which is
-scoped to `31Carlton7/homebrew-tap` alone and does not expire. To confirm it still works without
-cutting a release:
+To confirm `TAP_DEPLOY_KEY` still works without cutting a release:
 
 ```
 gh workflow run verify-tap-access.yml
 ```
 
-It clones the tap and asks the server whether a push would be accepted, writing nothing. To
-rotate the key: `ssh-keygen -t ed25519 -N "" -f tapkey`, add `tapkey.pub` under the tap's
-Settings → Deploy keys with "Allow write access", then
-`gh secret set TAP_DEPLOY_KEY < tapkey` on this repository, and delete both local files.
+It clones the tap and asks the server whether a push would be accepted, writing nothing. Rotating
+the key is the same four steps as creating it, above.

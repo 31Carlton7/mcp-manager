@@ -58,7 +58,10 @@ import Foundation
     #expect(SmartPasteParser.parse("claude mcp add --transport sse sentry https://mcp.sentry.dev/stream").servers ==
             [ExternalServer(name: "sentry", kind: .remote, url: "https://mcp.sentry.dev/stream", transport: .sse)])
     #expect(SmartPasteParser.parse("claude mcp add sentry https://mcp.sentry.dev/sse").servers.first?.transport == .sse)
-    #expect(SmartPasteParser.parse("claude mcp add -t http sentry https://mcp.sentry.dev/sse").servers.first?.transport == .sse)
+    // An explicit flag outranks the path: `-t http` on an `/sse` URL means the user knows
+    // something the convention does not. On a client-file server `.http` is stored as nil, so
+    // "not .sse" is the whole assertion.
+    #expect(SmartPasteParser.parse("claude mcp add -t http sentry https://mcp.sentry.dev/sse").servers.first?.transport == nil)
     // Through an mcp-remote bridge, where the URL is still the server.
     #expect(SmartPasteParser.parse("npx -y mcp-remote https://mcp.sentry.dev/sse").servers ==
             [ExternalServer(name: "sentry", kind: .remote, url: "https://mcp.sentry.dev/sse", transport: .sse)])

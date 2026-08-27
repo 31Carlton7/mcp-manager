@@ -96,7 +96,11 @@ public struct CatalogSearchParams: Codable, Equatable, Sendable {
     public init(query: String, limit: Int? = nil) { self.query = query; self.limit = limit }
 
     /// The requested limit, clamped into range.
-    public var clampedLimit: Int {
-        min(max(limit ?? 30, Self.limits.lowerBound), Self.limits.upperBound)
+    public var clampedLimit: Int { Self.clamp(limit) }
+
+    /// Bounded here rather than at each caller, so the daemon's own searches get the same ceiling
+    /// the wire does. `nil` asks for the default page size.
+    public static func clamp(_ limit: Int?) -> Int {
+        min(max(limit ?? 30, limits.lowerBound), limits.upperBound)
     }
 }

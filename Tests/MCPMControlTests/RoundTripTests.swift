@@ -9,14 +9,17 @@ private func tempSocketPath() -> String {
     "/tmp/mcpm-\(UUID().uuidString.prefix(8)).sock"
 }
 
+/// What a stub handler answers with when a test hands it a command it does not serve.
+private struct Unserved: Error { let method: String }
+
 @Test func serverAndClientRoundTripWithEvents() async throws {
     let sock = tempSocketPath()
-    let status = DaemonStatus(daemonVersion: "t", apiVersion: 1, servers: [], clients: [])
+    let status = aStatus(version: "t")
     let server = ControlServer(socketPath: sock) { req in
         switch req.command {
         case .hello: return .hello(daemonVersion: "t", apiVersion: 1)
         case .status: return .status(status)
-        default: throw ControlServerError.unsupported(req.command.method)
+        default: throw Unserved(method: req.command.method)
         }
     }
     try await server.start()
@@ -26,7 +29,6 @@ private func tempSocketPath() -> String {
     #expect(hello == .hello(daemonVersion: "t", apiVersion: 1))
     #expect(try await client.send(.status) == .status(status))
 
-    // events
     let events = await client.events()
     let evTask = Task { () -> [ControlEvent] in
         var got: [ControlEvent] = []
@@ -37,8 +39,8 @@ private func tempSocketPath() -> String {
     await server.broadcast(.status(status))
     #expect(await evTask.value == [.status(status)])
 
-    // error path
-    await #expect(throws: ControlClientError.self) { try await client.send(.listServers) }
+    // A command the handler refuses comes back as a remote error rather than as a hang.
+    await #expect(throws: ControlClientError.self) { try await client.send(.subscribe) }
 
     await client.close()
     try await server.stop()
@@ -77,21 +79,21 @@ private func tempSocketPath() -> String {
 @Test func concurrentRequestsMatchTheirOwnResponses() async throws {
     let sock = tempSocketPath()
     let server = ControlServer(socketPath: sock) { req in
-        guard case .removeServer(let p) = req.command else { throw ControlServerError.unsupported(req.command.method) }
+        guard case .removeServer(let p) = req.command else { throw Unserved(method: req.command.method) }
         // Stagger handling so a request that is slow to answer cannot swallow another's reply.
         try await Task.sleep(for: .milliseconds(p.id == "slow" ? 60 : 1))
-        return .servers([Server(id: p.id, name: p.id, kind: .stdio, source: "t", createdAt: Date())])
+        return .authorizeURL(p.id)
     }
     try await server.start()
     let client = ControlClient(socketPath: sock)
     try await client.connect()
     async let slow = client.send(.removeServer(.init(id: "slow")))
     async let fast = client.send(.removeServer(.init(id: "fast")))
-    guard case .servers(let a) = try await slow, case .servers(let b) = try await fast else {
+    guard case .authorizeURL(let a) = try await slow, case .authorizeURL(let b) = try await fast else {
         Issue.record("wrong result kind"); return
     }
-    #expect(a.first?.id == "slow")
-    #expect(b.first?.id == "fast")
+    #expect(a == "slow")
+    #expect(b == "fast")
 
     await client.close()
     try await server.stop()
@@ -99,7 +101,7 @@ private func tempSocketPath() -> String {
 
 @Test func eventStreamEndsWithTheConnectionAndReconnectStartsAFreshOne() async throws {
     let sock = tempSocketPath()
-    let status = DaemonStatus(daemonVersion: "t", apiVersion: 1, servers: [], clients: [])
+    let status = aStatus(version: "t")
     let server = ControlServer(socketPath: sock) { _ in .ack }
     try await server.start()
     let client = ControlClient(socketPath: sock)
@@ -190,7 +192,7 @@ private func tempSocketPath() -> String {
     }
     try await Task.sleep(for: .milliseconds(50))
     for i in 1...20 {
-        await server.broadcast(.status(DaemonStatus(daemonVersion: "\(i)", apiVersion: 1, servers: [], clients: [])))
+        await server.broadcast(.status(aStatus(version: "\(i)")))
     }
 
     // A stale status landing after a newer one would show the wrong state in the UI.

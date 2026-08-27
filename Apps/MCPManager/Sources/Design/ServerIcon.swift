@@ -15,17 +15,6 @@ struct ServerIcon: View {
     var args: [String] = []
     var size: CGFloat = 26
 
-    init(server: Server, size: CGFloat = 26) {
-        self.init(name: server.name, kind: server.kind, url: server.url,
-                  command: server.command, args: server.args, size: size)
-    }
-
-    init(name: String, kind: ServerKind, url: String? = nil, command: String? = nil,
-         args: [String] = [], size: CGFloat = 26) {
-        self.name = name; self.kind = kind; self.url = url; self.command = command
-        self.args = args; self.size = size
-    }
-
     @State private var favicon: NSImage?
 
     private var source: IconSource {
@@ -47,9 +36,8 @@ struct ServerIcon: View {
         case .monogram(let text, let hue):
             monogramTile(text, hue: hue)
         case .favicon(let hosts):
-            // Once a real favicon is loaded it fully replaces the tinted tile — no background
-            // square behind transparent icons. The rounded clip stays so square artwork still
-            // gets radii; the tile remains only while we have nothing but a monogram.
+            // A loaded favicon fully replaces the tinted tile, so a transparent icon doesn't sit on
+            // a coloured square. The rounded clip stays, so square artwork still gets radii.
             ZStack {
                 if let favicon {
                     Image(nsImage: favicon)
@@ -96,8 +84,15 @@ struct ServerIcon: View {
     }
 }
 
-/// Fetches and caches favicons: memory for the session, PNGs on disk under the app's caches
-/// directory. Every failure is silent and remembered for the session so a dead host is asked once.
+extension ServerIcon {
+    init(server: Server, size: CGFloat = 26) {
+        self.init(name: server.name, kind: server.kind, url: server.url,
+                  command: server.command, args: server.args, size: size)
+    }
+}
+
+/// Memory for the session, PNGs on disk under the app's caches directory. Every failure is silent
+/// and remembered for the session, so a dead host is asked once.
 actor FaviconCache {
     static let shared = FaviconCache()
 

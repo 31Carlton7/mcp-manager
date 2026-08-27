@@ -86,12 +86,8 @@ public struct Handlers: Sendable {
             return .hello(daemonVersion: daemonVersion, apiVersion: controlAPIVersion)
         case .status, .subscribe:
             return .status(await status())
-        case .listServers:
-            return .servers(await coord.currentLibrary().servers)
-        case .listClients:
-            return .clients(await status().clients)
         case .addServer(let p):
-            try validate(p)
+            try validate(name: p.name, kind: p.kind, command: p.command, url: p.url, auth: p.auth)
             // Before the mutate, so a malformed header doesn't leave a server behind that the
             // caller was told wasn't added.
             let credential = try headerCredential(p)
@@ -362,10 +358,6 @@ public struct Handlers: Sendable {
 
     /// A server the clients can't act on is worse than no server: it lands in every config file
     /// they own before anyone notices it was never going to start.
-    private func validate(_ p: AddServerParams) throws {
-        try validate(name: p.name, kind: p.kind, command: p.command, url: p.url, auth: p.auth)
-    }
-
     private func validate(name: String, kind: ServerKind, command: String?, url: String?,
                           auth: AuthKind) throws {
         func filled(_ s: String?) -> Bool {

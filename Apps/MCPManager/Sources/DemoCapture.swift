@@ -3,13 +3,11 @@ import SwiftUI
 import MCPMCore
 import MCPMControl
 
-// Demo capture only — the whole file. With `MCPM_DEMO_CAPTURE=<directory>` set, the app becomes its
-// own photographer: it drives itself through a handful of scripted scenes and writes the website's
-// stills and clip frames out of `NSView.cacheDisplay(in:to:)`, which renders the live hierarchy into
-// a bitmap without asking for Screen Recording — the app is only ever photographing itself.
-//
-// Nothing in here runs and no hook is registered when the variable is unset, which is every run
-// that isn't `scripts/render-site-media.sh`.
+// Demo capture only — the whole file. With `MCPM_DEMO_CAPTURE=<directory>` set (which only
+// `scripts/render-site-media.sh` does), the app drives itself through a handful of scripted scenes
+// and writes the website's stills and clip frames out of `NSView.cacheDisplay(in:to:)`, which
+// renders the live hierarchy into a bitmap without asking for Screen Recording. Nothing here runs
+// and no hook is registered when the variable is unset.
 
 enum DemoCapture {
     /// Where the stills, the frame folders and the `done` marker go. nil in a normal run, which is
@@ -44,7 +42,7 @@ enum DemoCapture {
     static let sheetPlate = NSColor.white
 }
 
-/// The hooks the driver steers the UI with. Each one is the same write the corresponding button or
+/// The hooks the driver steers the UI with. Each is the same write the corresponding button or
 /// field makes; the views install them from `onAppear`, and only while capture is on.
 @MainActor
 enum DemoHooks {
@@ -57,10 +55,9 @@ enum DemoHooks {
 }
 
 extension View {
-    /// Draws the controls the way they look when the app is in front. The capture runs while the
-    /// user's own Mac keeps the frontmost app, and activation is cooperative — an inactive window
-    /// draws its accents in the inactive grey, which is not what this app looks like in use.
-    /// Untouched in a normal run, where the window's real state is the right answer.
+    /// Draws the controls the way they look when the app is in front: an inactive window draws its
+    /// accents in the inactive grey, which is not what this app looks like in use. Untouched in a
+    /// normal run, where the window's real state is the right answer.
     @ViewBuilder func demoActiveControls() -> some View {
         if DemoCapture.isActive {
             environment(\.controlActiveState, .key)
@@ -69,7 +66,7 @@ extension View {
         }
     }
 
-    /// Starts the capture driver. A no-op — not even a modifier — in a normal run.
+    /// A no-op — not even a modifier — in a normal run.
     @ViewBuilder func demoCapture(_ daemon: DaemonClient) -> some View {
         if DemoCapture.isActive {
             modifier(DemoCaptureModifier(daemon: daemon))
@@ -152,8 +149,8 @@ final class DemoDriver {
 
     // MARK: scenes
 
-    /// The library as the site leads with it: every server as a card, one of them selected so the
-    /// inspector is open on a signed-in remote server.
+    /// Every server as a card, one of them selected so the inspector is open on a signed-in remote
+    /// server.
     private func captureGrid(_ window: NSWindow) async -> NSBitmapImageRep? {
         DemoHooks.showServers?()
         DemoHooks.select?("notion")
@@ -164,8 +161,7 @@ final class DemoDriver {
     }
 
     /// The popover cannot be opened from code — `MenuBarExtra` owns its window — so it is rebuilt:
-    /// the same view, at the same width, in the same rounded shell, on a light backdrop wide enough
-    /// to sit in the site's media band.
+    /// the same view, at the same width, in the same rounded shell.
     private func capturePopover() async -> NSBitmapImageRep? {
         let content = MenuBarView()
             .environment(daemon)
@@ -199,7 +195,7 @@ final class DemoDriver {
         return Self.band(around: popover, scale: scale)
     }
 
-    /// Toggling a server on and off for a client, which is the one thing the app is for.
+    /// Toggling a server on and off for a client.
     private func recordLibrary(_ window: NSWindow) async {
         DemoHooks.showServers?()
         DemoHooks.select?(nil)
@@ -217,11 +213,8 @@ final class DemoDriver {
 
     /// A server waiting on a sign-in becoming a signed-in one. The credential is planted in the
     /// scratch store from outside the daemon, so the app asks for a status rather than waiting for
-    /// a push nothing would send.
-    ///
-    /// Notion, which the stills show signed in: the clip takes its credential away first, films the
-    /// wait, and puts it back. The test result at the end is what the live Notion server actually
-    /// answers — nothing on screen here is made up.
+    /// a push nothing would send. Notion is signed in for the stills, so the clip takes its
+    /// credential away first and puts it back.
     private func recordSignIn(_ window: NSWindow) async {
         DemoHooks.showServers?()
         DemoHooks.select?("notion")
@@ -241,8 +234,8 @@ final class DemoDriver {
     }
 
     /// Searching the catalog and opening the Add sheet already filled in. GitHub rather than a
-    /// server the library already has: an entry that is already in there says "Added" instead of
-    /// offering the button the clip is about.
+    /// server the library already has, which would say "Added" instead of offering the button the
+    /// clip is about.
     private func recordCatalog(_ window: NSWindow) async {
         DemoHooks.select?(nil)
         DemoHooks.showCatalog?()
@@ -267,10 +260,8 @@ final class DemoDriver {
         DemoHooks.setCatalogQuery?("")
     }
 
-    /// Swaps the scratch credential store for one of the versions the script staged beside it —
-    /// signing out is deleting a token and signing in is the browser handing one back, and both are
-    /// just which file is at `tokens.json`. The store is read on every lookup, so the daemon reports
-    /// the new state the next time it is asked.
+    /// Swaps the scratch credential store for one of the versions the script staged beside it. The
+    /// store is read on every lookup, so the daemon reports the new state the next time it is asked.
     private func applyTokens(_ staged: String) {
         let root = HomeDirectory.url.appendingPathComponent(".mcpm")
         let source = root.appendingPathComponent(staged)
@@ -282,7 +273,6 @@ final class DemoDriver {
 
     // MARK: capture
 
-    /// One still, written as a PNG, with a clear failure if the capture came back empty.
     private func still(_ name: String, _ make: () async -> NSBitmapImageRep?) async throws {
         guard let rep = await make(), let png = rep.representation(using: .png, properties: [:]) else {
             throw Failure.blank(name)
@@ -303,7 +293,6 @@ final class DemoDriver {
         let ticker = Task { @MainActor in
             while !Task.isCancelled {
                 let tick = Date()
-                // Cheap, and it holds the window key for the length of the clip.
                 if !NSApp.isActive || !window.isKeyWindow { self.reactivate(window) }
                 if let rep = self.snapshot(window) { recorder.write(rep) }
                 let cost = Date().timeIntervalSince(tick)
@@ -416,18 +405,17 @@ final class DemoDriver {
         return panels
     }
 
-    /// Every paste in this file, and the only way any of them should be done. `NSImageRep.draw(in:)`
-    /// composites with `copy`, which *replaces* the destination — including where the bitmap is
-    /// transparent, and a rounded corner is a bitmap that is transparent at the corners. Pasting a
-    /// window over a backdrop with `copy` punches the backdrop straight back out again, which is
-    /// how the popover's corners came out as four transparent squares.
+    /// Every paste in this file goes through here. `NSImageRep.draw(in:)` composites with `copy`,
+    /// which *replaces* the destination — including where the bitmap is transparent, and a rounded
+    /// corner is a bitmap that is transparent at the corners, so pasting over a backdrop with
+    /// `copy` punches the backdrop straight back out.
     private static func over(_ rep: NSBitmapImageRep, in rect: NSRect) {
         rep.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1,
                  respectFlipped: false, hints: nil)
     }
 
-    /// The popover, centred on a band as wide as the site's column so the still is used at its own
-    /// size rather than blown up from 332 pt.
+    /// Centred on a band as wide as the site's column, so the still is used at its own size rather
+    /// than blown up from 332 pt.
     private static func band(around popover: NSBitmapImageRep, scale: CGFloat) -> NSBitmapImageRep? {
         let width = DemoCapture.windowSize.width * scale
         let inset = 64 * scale
@@ -482,10 +470,8 @@ final class DemoDriver {
         guard NSApp.isActive, window.isKeyWindow else { throw Failure.inactive }
     }
 
-    /// Gets the window key and keeps asking until it is: an inactive window draws every
-    /// accent-coloured control in the inactive grey, which is not what the app looks like in use.
-    /// Worth re-asserting before every scene — activation granted at launch does not survive
-    /// whatever else the Mac is doing.
+    /// Keeps asking until the window is key. Worth re-asserting before every scene: activation
+    /// granted at launch does not survive whatever else the Mac is doing.
     private func activate(_ window: NSWindow) async {
         for _ in 0..<20 {
             if NSApp.isActive && window.isKeyWindow { return }

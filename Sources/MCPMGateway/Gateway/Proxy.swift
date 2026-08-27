@@ -236,30 +236,12 @@ struct Proxy: Sendable {
         error(.serviceUnavailable, "unavailable", "token store unavailable")
     }
 
+    /// `message` carries text an upstream server chose, so the body is serialized rather than
+    /// interpolated.
     static func error(_ status: HTTPResponse.Status, _ code: String, _ message: String) -> Response {
-        let json = #"{"error":"\#(code)","message":"\#(jsonEscape(message))"}"#
+        let json = try? JSONSerialization.data(withJSONObject: ["error": code, "message": message],
+                                               options: [.sortedKeys, .withoutEscapingSlashes])
         return Response(status: status, headers: [.contentType: "application/json"],
-                        body: .init(byteBuffer: ByteBuffer(string: json)))
+                        body: .init(byteBuffer: ByteBuffer(bytes: json ?? Data())))
     }
-}
-
-func jsonEscape(_ s: String) -> String {
-    var out = ""
-    out.reserveCapacity(s.count)
-    for c in s.unicodeScalars {
-        switch c {
-        case "\"": out += "\\\""
-        case "\\": out += "\\\\"
-        case "\n": out += "\\n"
-        case "\r": out += "\\r"
-        case "\t": out += "\\t"
-        default:
-            if c.value < 0x20 {
-                out += String(format: "\\u%04x", c.value)
-            } else {
-                out.unicodeScalars.append(c)
-            }
-        }
-    }
-    return out
 }

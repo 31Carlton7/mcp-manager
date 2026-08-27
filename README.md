@@ -8,19 +8,19 @@ it into the config files those clients already read (Claude Code `~/.claude.json
 Cursor `~/.cursor/mcp.json`, Codex `~/.codex/config.toml`), with a checkbox per client so a server
 can be on in one place and off in another. Remote servers that need OAuth are signed into once
 through a local auth gateway, and every client talks to the gateway instead of holding its own
-token. Any server can be tested from the app before you trust it.
+token. There is a Catalog tab for finding a server in the first place: a curated list that ships
+with the app, plus a live search of the official MCP registry. And any server can be tested from
+the app before you trust it.
 
 macOS only, and it needs macOS 26 or later.
 
 ## Screenshots
 
-Screenshots coming with the first release.
+![The library, with a chip per client on every card](docs/img/grid.png)
 
-<!-- screenshots: docs/img/grid.png, docs/img/popover.png -->
+![The menu bar popover](docs/img/popover.png)
 
 ## Install
-
-Once the first release is tagged:
 
 ```
 brew install --cask 31carlton7/tap/mcp-manager
@@ -65,7 +65,7 @@ Preferences live in `~/.mcpm/settings.json`: `gatewayPort` (7337 by default), `b
 write the same file. `MCPM_GATEWAY_PORT` outranks the file when it is set.
 
 Servers with `auth: oauth` or `auth: header` are written to clients as
-`http://127.0.0.1:7337/s/<id>/mcp` instead of their real URL. The gateway on that port proxies the
+`http://localhost:7337/s/<id>/mcp` instead of their real URL. The gateway on that port proxies the
 request upstream and attaches the credential, refreshing an expiring OAuth token before it goes
 out. Tokens live in the Keychain, never in `servers.json` and never in a client's config.
 
@@ -94,7 +94,7 @@ session running, and re-enable it.
 - OAuth tokens and header secrets are stored in the Keychain, accessible after first unlock, not
   synced to iCloud. The library file and the client configs never contain them.
 - OAuth uses PKCE S256 with a single-use, short-lived `state` and an exact redirect match.
-- The control socket is 0600 and the daemon checks the peer's UID.
+- The control socket is mode 0600, so only your own account can open it.
 
 ## Development
 
@@ -121,7 +121,7 @@ HOME=$(mktemp -d) MCPM_TOKEN_STORE=file MCPM_GATEWAY_PORT=7447 .build/debug/mcpm
 ```
 
 Rebuilding the app changes its code signature, and launchd holds the code requirement it recorded
-when the login item was registered — so after a dev (ad-hoc signed) build it refuses to spawn the
+when the login item was registered. So after a dev (ad-hoc signed) build it refuses to spawn the
 bundled daemon (`spawn failed`, "needs LWCR update") even though the service still reports as
 enabled. Re-registering the login item rewrites the requirement. The app does this itself when the
 service is unreachable a few seconds after launch, or you can trigger it from Settings → Repair
@@ -129,8 +129,6 @@ registration. Signed release builds keep a stable identity and don't run into th
 
 ## Roadmap
 
-- Catalog of curated servers plus the official MCP registry, so adding one is a search rather than
-  a paste.
 - More clients (Windsurf, Zed, VS Code) once the four in place have settled.
 
 ## License

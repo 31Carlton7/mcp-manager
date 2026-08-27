@@ -4,11 +4,11 @@ import MCPMControl
 
 /// Adding a server is one paste. Whatever the user has on the clipboard — the URL from a docs page,
 /// the `npx …` line from a README, or the whole `{"mcpServers": …}` block — is parsed live and the
-/// rest of the form fills itself in. The fields that almost nobody touches live behind Advanced.
+/// rest of the form fills itself in.
 struct AddServerSheet: View {
-    /// A catalog entry the sheet opens on. It is written into the paste well rather than into the
-    /// fields, so a server picked from the catalog and a server pasted from a README take exactly
-    /// the same path through the form — and the URL is checked either way.
+    /// A catalog entry the sheet opens on. Written into the paste well rather than into the fields,
+    /// so a catalog pick and a README paste take the same path through the form and the URL is
+    /// checked either way.
     var prefill: CatalogEntry?
 
     @Environment(DaemonClient.self) private var daemon
@@ -30,11 +30,10 @@ struct AddServerSheet: View {
     /// once the server exists.
     @State private var headerName = "Authorization"
     @State private var headerValue = ""
-    /// The paste well's current height: one line to start, growing with the content up to a point
-    /// past which it scrolls instead.
+    /// One line to start, growing with the content up to a point past which it scrolls instead.
     @State private var pasteHeight: CGFloat = Self.pasteMinHeight
-    /// What the daemon found when it asked the pasted URL what it is. Nil whenever there is no
-    /// remote URL to ask about, and while the answer for a new one is still coming.
+    /// What the daemon found when it asked the pasted URL what it is. Nil while there is no remote
+    /// URL to ask about, and while the answer for a new one is still coming.
     @State private var inspection: URLInspection?
     @State private var checking = false
     /// Why the check itself couldn't run — a malformed URL, or the service being unreachable. Not
@@ -45,12 +44,10 @@ struct AddServerSheet: View {
     @State private var authEdited = false
     /// Set while the add is in flight, so a second Return can't add the same server twice.
     @State private var adding = false
-    /// The daemon's reason for refusing the add — most often that the URL is not an endpoint.
     @State private var addError: String?
     /// A server that was just added needing a sign-in, keeping the sheet open to offer it.
     @State private var added: AddedServer?
 
-    /// The one thing worth remembering about a server after it exists: how to start its sign-in.
     private struct AddedServer: Identifiable {
         let id: String
         let name: String
@@ -70,8 +67,7 @@ struct AddServerSheet: View {
     private var trimmedName: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var trimmedHeaderName: String { headerName.trimmingCharacters(in: .whitespaces) }
 
-    /// The URL the inspection is about, and the key its task is keyed on: a new one is a new
-    /// question, and the answer to the old one is thrown away with it.
+    /// The URL the inspection is about, and the key its task is keyed on.
     private var remoteURL: String? {
         guard let single, single.kind == .remote, let url = single.url, !url.isEmpty else { return nil }
         return url
@@ -81,10 +77,9 @@ struct AddServerSheet: View {
     /// would refuse the add anyway; saying so here saves the round trip and offers the way out.
     private var notAnEndpoint: Bool { inspection?.parsedVerdict == .notMCP }
 
-    /// A settled answer about this exact URL: the check has finished, it was about the URL being
-    /// added, and it found an endpoint. The daemon inspects again on its way in unless told not
-    /// to, and that second probe is a network round trip the add sits on top of — so when the
-    /// answer is already in hand, it is sent along instead of asked for twice.
+    /// A settled answer about this exact URL. The daemon inspects again on its way in unless told
+    /// not to, and that second probe is a network round trip the add sits on top of — so when the
+    /// answer is already in hand it is sent along instead of asked for twice.
     private func settledInspection(for server: ExternalServer) -> URLInspection? {
         guard server.kind == .remote, !checking, remoteURL == server.url,
               let inspection, inspection.parsedVerdict == .mcpEndpoint
@@ -142,8 +137,7 @@ struct AddServerSheet: View {
                     DisclosureGroup(isExpanded: $advanced) {
                         advancedFields
                             .padding(.top, Space.s)
-                            // The observed indent for a nested option group: the disclosed contents
-                            // sit under the label rather than beside the rest of the form.
+                            // The observed indent for a nested option group.
                             .padding(.leading, 19)
                     } label: {
                         Text("Advanced")
@@ -163,15 +157,15 @@ struct AddServerSheet: View {
             clients = Set(daemon.installedClients.map(\.id))
             applyPrefill()
         }
-        // Parsing a JSON block on every keystroke is wasted work, and a half-typed URL briefly
-        // parses as something else — so the form settles a beat after typing stops.
+        // A half-typed URL briefly parses as something else, so the form settles a beat after
+        // typing stops.
         .task(id: paste) {
             try? await Task.sleep(for: .milliseconds(250))
             guard !Task.isCancelled else { return }
             reparse()
         }
-        // Keyed on the URL rather than on the paste: retyping the name around it asks the same
-        // question, and a URL that changes cancels the check that was running for the old one.
+        // Keyed on the URL rather than on the paste: retyping around it asks the same question,
+        // and a URL that changes cancels the check that was running for the old one.
         .task(id: remoteURL) { await inspect() }
         .animation(.snappy(duration: 0.2), value: parsed.servers.count)
         .animation(.snappy(duration: 0.2), value: checking)
@@ -197,8 +191,6 @@ struct AddServerSheet: View {
             .controlWell()
             .overlay(alignment: .topLeading) {
                 if paste.isEmpty {
-                    // TextEditor insets its own text by ~5 pt, so the placeholder matches that
-                    // rather than the container padding alone.
                     Text("Paste a URL, a command, or the JSON snippet from a README…")
                         .font(pasteFont)
                         .foregroundStyle(.tertiary)
@@ -210,14 +202,14 @@ struct AddServerSheet: View {
             .accessibilityLabel("Server to add")
     }
 
-    /// The same string in the same font behind the editor, laid out at the editor's width, is the
-    /// cheapest honest answer to "how tall does this need to be" — `TextEditor` won't say. It is
-    /// hidden, so it only ever contributes its height.
+    /// `TextEditor` will not report the height its content needs, so the same string in the same
+    /// font is laid out behind it, hidden, and only ever contributes that height.
     private var pasteMeasure: some View {
         Text(paste.isEmpty ? " " : paste)
             .font(pasteFont)
             // TextEditor insets its own text by ~5 pt a side; matching that keeps the wrapping the
-            // same in both, which is the whole point of the measurement.
+            // same in both, which is the whole point of the measurement. The placeholder above
+            // matches it too.
             .padding(.horizontal, 5)
             .frame(maxWidth: .infinity, alignment: .topLeading)
             .hidden()
@@ -226,7 +218,7 @@ struct AddServerSheet: View {
             }
     }
 
-    /// The parser's own words about what it found. A blank line still takes up room, so the fields
+    /// The parser's own words about what it found. Blank still takes up its line, so the fields
     /// below don't jump the first time something is typed.
     private var summaryLine: some View {
         Text(parsed.summary.isEmpty ? " " : parsed.summary)
@@ -242,8 +234,8 @@ struct AddServerSheet: View {
 
     // MARK: inspection
 
-    /// What the URL itself says, as opposed to what the paste said about it. Only remote servers
-    /// have anything here, so the row is absent rather than blank for a local one.
+    /// What the URL itself says, as opposed to what the paste said about it. Absent rather than
+    /// blank for a local server, which has nothing to check.
     @ViewBuilder private var inspectionLine: some View {
         if checking {
             HStack(spacing: Space.xs) {
@@ -306,9 +298,9 @@ struct AddServerSheet: View {
         .foregroundStyle(tint)
     }
 
-    /// Asks the daemon what the pasted URL is, a beat after it stops changing. Cancellation is the
-    /// whole design: `.task(id:)` kills the check for a URL nobody is looking at any more, and the
-    /// answer to it is dropped rather than shown against the URL that replaced it.
+    /// Asks the daemon what the pasted URL is, a beat after it stops changing. `.task(id:)` kills
+    /// the check for a URL nobody is looking at any more, and its answer is dropped rather than
+    /// shown against the URL that replaced it.
     private func inspect() async {
         inspection = nil
         inspectionError = nil
@@ -331,16 +323,9 @@ struct AddServerSheet: View {
             }
         } catch {
             guard !Task.isCancelled else { return }
-            inspectionError = reason(error)
+            inspectionError = DaemonClient.reason(error)
         }
         checking = false
-    }
-
-    /// The daemon's own words for a refusal; anything else is a transport failure, which has no
-    /// sentence in it worth showing.
-    private func reason(_ error: Error) -> String {
-        if case ControlClientError.remote(let why) = error { return why }
-        return String(describing: error)
     }
 
     private func preview(_ server: ExternalServer) -> some View {
@@ -363,7 +348,7 @@ struct AddServerSheet: View {
         .accessibilityElement(children: .combine)
     }
 
-    /// A throwaway `Server` so the preview can reuse `ServerIcon` and `subline`; it is never saved.
+    /// A throwaway `Server` so the preview can reuse `ServerIcon` and `subline`; never saved.
     private func previewServer(_ e: ExternalServer) -> Server {
         Server(id: "preview", name: trimmedName.isEmpty ? e.name : trimmedName, kind: e.kind,
                command: e.command, args: e.args, env: e.env, url: e.url, headers: e.headers,
@@ -402,8 +387,8 @@ struct AddServerSheet: View {
 
     // MARK: advanced
 
-    /// Mirrors the inspector: a stdio server has a command line and an environment, a remote one has
-    /// headers and can be signed in to.
+    /// Mirrors the inspector: a stdio server has a command line and an environment, a remote one
+    /// has headers and can be signed in to.
     @ViewBuilder private var advancedFields: some View {
         VStack(alignment: .leading, spacing: Space.m) {
             switch single?.kind {
@@ -525,8 +510,7 @@ struct AddServerSheet: View {
     }
 
     /// A server added as OAuth exists but can't be reached yet, and the sign-in is one browser
-    /// round trip away. Asking here, while the user is still thinking about this server, is worth
-    /// more than a badge they'll find later.
+    /// round trip away — worth asking here rather than leaving a badge to be found later.
     private func signInRow(_ added: AddedServer) -> some View {
         HStack(spacing: Space.s) {
             Text("Added \(added.name). Sign in now?")
@@ -563,8 +547,6 @@ struct AddServerSheet: View {
         headerRows = single.headers.sorted { $0.key < $1.key }.map { KeyValueRow(key: $0.key, value: $0.value) }
     }
 
-    /// Awaited rather than fired off, because the daemon inspects the URL again on its way in and
-    /// can still refuse — and because a server added needing a sign-in has one more thing to say.
     /// Fills the form from a catalog entry: the paste well gets the URL, or the command line, or
     /// — when the entry names environment the command line has nowhere to put — the JSON the
     /// parser also reads, so the placeholders arrive visible and editable.
@@ -590,6 +572,8 @@ struct AddServerSheet: View {
         return json
     }
 
+    /// Awaited rather than fired off, because the daemon inspects the URL again on its way in and
+    /// can still refuse — and because a server added needing a sign-in has one more thing to say.
     private func add() {
         let enabled = Dictionary(uniqueKeysWithValues: clients.map { ($0, true) })
         let requests = parsed.servers.map { params(for: $0, clients: enabled) }
@@ -602,15 +586,13 @@ struct AddServerSheet: View {
                 do {
                     let id = try await daemon.addAwaiting(request)
                     // What the daemon stored, not what was asked for: it inspects the URL itself
-                    // and can land on an auth kind the form didn't send. Only the last of a batch
-                    // is offered, and a batch is all `auth: .none` anyway — the sheet offers auth
-                    // for a single server only.
+                    // and can land on an auth kind the form didn't send.
                     if let added = daemon.servers.first(where: { $0.id == id })?.server,
                        added.auth == .oauth {
                         signIn = AddedServer(id: added.id, name: added.name)
                     }
                 } catch {
-                    addError = reason(error)
+                    addError = DaemonClient.reason(error)
                     return
                 }
             }
@@ -644,8 +626,6 @@ struct AddServerSheet: View {
                                auth: kind, clients: clients,
                                headerName: credential ? trimmedHeaderName : nil,
                                headerValue: credential ? headerValue : nil,
-                               // Everything the daemon would go and find out is already on this
-                               // form — the auth kind from the same answer, editable since.
                                autoDetectAuth: settled == nil)
     }
 

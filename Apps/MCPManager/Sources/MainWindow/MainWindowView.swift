@@ -3,15 +3,14 @@ import ServiceManagement
 import MCPMCore
 import MCPMControl
 
-/// The main window: two tabs under one header — the library of servers, with filters, a grid of
-/// cards and an inspector on the right, and the catalog of servers there are to add. Selection
-/// lives here because both the grid and the inspector need it; everything else about a server is
-/// read straight from the daemon's status.
+/// Two tabs under one header: the library of servers as a grid with an inspector, and the catalog
+/// of servers there are to add. Selection lives here because both the grid and the inspector need
+/// it; everything else about a server is read straight from the daemon's status.
 struct MainWindowView: View {
     @Environment(DaemonClient.self) private var daemon
     @Environment(StartupSettings.self) private var startup
 
-    /// Sticky per-user, not per-launch: someone who has said "not now" has answered the question.
+    /// Sticky per-user: someone who has said "not now" has answered the question.
     @AppStorage("dismissedStartupNudge") private var dismissedStartupNudge = false
 
     @State private var tab: Tab = .servers
@@ -19,14 +18,11 @@ struct MainWindowView: View {
     @State private var clientFilter: ClientID?
     @State private var kindFilter: ServerKind?
     @State private var query = ""
-    /// The Add sheet, and what it opens on. A fresh request each time, so a sheet opened from the
-    /// catalog and one opened from the toolbar can never inherit each other's entry.
     @State private var addRequest: AddRequest?
     @State private var showRemove = false
     @State private var showOnboarding = false
     /// Set once the sheet has been offered, so dismissing it doesn't immediately re-present it.
-    /// Not persisted: setup is unfinished until the daemon says otherwise, and the banner is what
-    /// carries that between launches.
+    /// Not persisted: the banner is what carries an unfinished setup between launches.
     @State private var offeredOnboarding = false
     /// ⌫ only means "remove" while the grid itself has focus — inside the search field it still
     /// deletes a character.
@@ -34,8 +30,8 @@ struct MainWindowView: View {
 
     enum Tab: String, CaseIterable { case servers = "Servers", catalog = "Catalog" }
 
-    /// One press of Add. The id is what makes each press its own sheet rather than a re-run of the
-    /// last one.
+    /// One press of Add. The fresh id is what makes each press its own sheet, so a sheet opened
+    /// from the catalog and one opened from the toolbar can never inherit each other's entry.
     private struct AddRequest: Identifiable {
         let id = UUID()
         var entry: CatalogEntry?
@@ -46,8 +42,8 @@ struct MainWindowView: View {
         return daemon.status?.servers.first { $0.id == selection }
     }
 
-    /// Name match AND kind AND, under a client filter, on in that client. A few dozen servers, so
-    /// this is cheap enough to do while the view builds.
+    /// Name match AND kind AND, under a client filter, on in that client. A few dozen servers at
+    /// most, which is why this can run in `body` rather than being cached on the model.
     private var filtered: [ServerStatus] {
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return daemon.servers.filter { st in
@@ -59,7 +55,7 @@ struct MainWindowView: View {
     }
 
     var body: some View {
-        // Filtering once per body: the header's count and the grid are the same list.
+        // The header's count and the grid are the same list.
         let servers = filtered
         VStack(spacing: 0) {
             header(count: servers.count)
@@ -77,9 +73,8 @@ struct MainWindowView: View {
         .animation(.snappy(duration: 0.2), value: showStartupNudge)
         .animation(.snappy(duration: 0.2), value: daemon.needsSetup)
         .animation(.snappy(duration: 0.2), value: tab)
-        // The inspector is about a selected server: no selection, no panel. Binding the
-        // presentation to the selection (rather than the tab) both returns the width to the grid
-        // and lets the system's close affordance clear the selection.
+        // Binding the presentation to the selection rather than the tab both returns the width to
+        // the grid and lets the system's close affordance clear the selection.
         .inspector(isPresented: Binding(
             get: { tab == .servers && selection != nil },
             set: { if !$0 { selection = nil } }
@@ -93,8 +88,8 @@ struct MainWindowView: View {
         .sheet(isPresented: $showOnboarding) {
             OnboardingSheet().environment(daemon).environment(startup)
         }
-        // The daemon is the authority on whether setup is finished, and its first status arrives
-        // after this window does — so the sheet waits for the answer rather than for onAppear.
+        // The daemon's first status arrives after this window does, so the sheet waits for the
+        // answer rather than for onAppear.
         .onChange(of: daemon.needsSetup, initial: true) { _, needed in
             guard needed, !offeredOnboarding else { return }
             offeredOnboarding = true
@@ -109,8 +104,7 @@ struct MainWindowView: View {
         } message: { st in
             Text("Remove \(st.server.name) from all clients?")
         }
-        // A server can leave under us — removed here, or deleted from every client's config on
-        // disk — and a selection pointing at nothing would leave the inspector permanently empty.
+        // A selection pointing at a server that has left would leave the inspector empty for good.
         .onChange(of: daemon.status?.servers.map(\.id) ?? []) { _, ids in
             if let selection, !ids.contains(selection) { self.selection = nil }
         }
@@ -121,8 +115,7 @@ struct MainWindowView: View {
         }
     }
 
-    /// Demo capture only: the scripted scenes move the window through exactly the writes its own
-    /// tabs, cards and Add button make. Nothing is installed in a normal run.
+    /// Demo capture only; see DemoCapture.swift.
     private func installDemoHooks() {
         guard DemoCapture.isActive else { return }
         DemoHooks.showServers = { self.tab = .servers }
@@ -134,8 +127,8 @@ struct MainWindowView: View {
 
     // MARK: setup banner
 
-    /// Stays up for as long as the daemon is holding the first import — dismissing the sheet
-    /// postpones the question, it does not answer it, and until it is answered nothing on this
+    /// Stays up for as long as the daemon is holding the first import: dismissing the sheet
+    /// postpones the question rather than answering it, and until it is answered nothing on this
     /// Mac is being written to.
     @ViewBuilder private var setupBanner: some View {
         if daemon.needsSetup {
@@ -153,11 +146,9 @@ struct MainWindowView: View {
 
     // MARK: startup nudge
 
-    /// The one thing a fresh install gets wrong on its own: the daemon only runs because the app
-    /// started it, so the next reboot comes up with nothing running. Gone the moment the agent is
-    /// enabled, whether from here or from System Settings.
-    /// Suppressed while setup is unfinished: the onboarding sheet's first step asks the same
-    /// question, and the setup banner is already holding that spot.
+    /// A fresh install's daemon runs only because the app started it, so the next reboot comes up
+    /// with nothing running. Suppressed while setup is unfinished — the onboarding sheet's first
+    /// step asks the same question, and the setup banner is already holding that spot.
     private var showStartupNudge: Bool {
         !startup.daemonAtLogin && !dismissedStartupNudge && !daemon.needsSetup
     }
@@ -165,8 +156,8 @@ struct MainWindowView: View {
 
     @ViewBuilder private var startupNudge: some View {
         if showStartupNudge {
-            // Registering again cannot clear an approval the user withheld — only they can, in
-            // System Settings — so the banner asks for that instead of a button that no-ops.
+            // Registering again cannot clear an approval the user withheld, so under
+            // `.requiresApproval` the banner points at System Settings instead of at a no-op.
             NoticeBanner(text: needsApproval
                          ? "Approve MCP Manager in System Settings → Login Items"
                          : "Start the background service at login so your servers survive restarts.",
@@ -201,10 +192,9 @@ struct MainWindowView: View {
                 TabStrip(Tab.allCases, selection: $tab, title: \.rawValue)
                     .fixedSize()
                     .layoutPriority(2)
-                // The filters, the count and the search are all about the library; the catalog
-                // brings its own search and has nothing to filter.
+                // The catalog brings its own search and has nothing to filter.
                 if tab == .servers {
-                    clientMenu
+                    ClientFilterMenu(clients: daemon.installedClients, selection: $clientFilter)
                     kindMenu
                     // First thing to give way when the window narrows; the grid answers the
                     // same question.
@@ -216,7 +206,10 @@ struct MainWindowView: View {
                         .layoutPriority(-1)
                 }
                 Spacer(minLength: Space.m)
-                if tab == .servers { search }
+                if tab == .servers {
+                    SearchField(prompt: "Search", text: $query, fieldWidth: 150)
+                        .fixedSize()
+                }
                 Button("Add", systemImage: "plus") { addRequest = AddRequest() }
                     .buttonStyle(.borderedProminent)
                     .disabled(!daemon.isConnected)
@@ -234,27 +227,6 @@ struct MainWindowView: View {
         .padding(.bottom, Space.m)
     }
 
-    private var clientMenu: some View {
-        Menu {
-            Button("All clients") { clientFilter = nil }
-            ForEach(daemon.installedClients) { client in
-                Button(client.displayName) { clientFilter = client.id }
-            }
-        } label: {
-            Text(clientLabel).font(Typography.rowTitle)
-        }
-        .menuStyle(.button)
-        .buttonStyle(.glass)
-        .buttonBorderShape(.capsule)
-        .fixedSize()
-        .accessibilityLabel("Client filter")
-    }
-
-    private var clientLabel: String {
-        guard let clientFilter else { return "All clients" }
-        return daemon.installedClients.first { $0.id == clientFilter }?.displayName ?? clientFilter.rawValue
-    }
-
     private var kindMenu: some View {
         Menu {
             Button("All kinds") { kindFilter = nil }
@@ -268,28 +240,6 @@ struct MainWindowView: View {
         .buttonBorderShape(.capsule)
         .fixedSize()
         .accessibilityLabel("Kind filter")
-    }
-
-    private var search: some View {
-        HStack(spacing: Space.xs) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-            TextField("Search", text: $query)
-                .textFieldStyle(.plain)
-                .font(Typography.field)
-                .frame(minWidth: 70, idealWidth: 150, maxWidth: 150)
-            if !query.isEmpty {
-                Button { query = "" } label: { Image(systemName: "xmark.circle.fill").font(.system(size: 11)) }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                    .accessibilityLabel("Clear search")
-            }
-        }
-        .padding(.horizontal, Space.s)
-        .padding(.vertical, 5)
-        .pill()
-        .fixedSize()
     }
 
     // MARK: grid
@@ -353,8 +303,6 @@ struct MainWindowView: View {
         if let err = daemon.lastError {
             banner(err, tint: Semantic.red)
         }
-        // The daemon's own last failure — a sync or write that went wrong with nobody watching —
-        // as opposed to the command we just sent.
         if let err = daemon.status?.lastError {
             banner("Background service: \(err)", tint: Semantic.orange)
         }

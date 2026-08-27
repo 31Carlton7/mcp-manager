@@ -42,7 +42,7 @@ private struct ExplodingAdapter: ClientAdapter {
     }
     // The corrupt library is still there to be recovered, not replaced with an empty one.
     #expect(try Data(contentsOf: e.store.url) == garbage)
-    #expect(await e.coord.lastSyncError() != nil)
+    #expect(await e.coord.lastError != nil)
 }
 
 @Test func coordinatorKeepsWritingOtherClientsWhenOneAdapterFailsToRender() async throws {
@@ -63,7 +63,7 @@ private struct ExplodingAdapter: ClientAdapter {
 
     let health = await coord.clientHealth()
     #expect(health[.claudeDesktop]?.healthy == false)
-    #expect(await coord.lastSyncError()?.contains("claude-desktop") == true)
+    #expect(await coord.lastError?.contains("claude-desktop") == true)
     // Cursor's write went through despite the other adapter blowing up in the same pass.
     #expect(health[.cursor]?.healthy == true)
     #expect(try !String(contentsOf: cursor.configPath, encoding: .utf8).contains("\"a\""))
