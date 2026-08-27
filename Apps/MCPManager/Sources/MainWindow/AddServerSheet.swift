@@ -387,11 +387,9 @@ struct AddServerSheet: View {
             switch single?.kind {
             case .stdio:
                 argsField
-                KeyValueEditor(title: "Env", noun: "environment variable",
-                               placeholder: ("KEY", "value"), rows: $envRows)
+                KeyValueEditor(.env, rows: $envRows)
             case .remote:
-                KeyValueEditor(title: "Headers", noun: "header",
-                               placeholder: ("Header", "value"), rows: $headerRows)
+                KeyValueEditor(.headers, rows: $headerRows)
                 authField
             case nil:
                 EmptyView()

@@ -3,34 +3,61 @@ import SwiftUI
 /// The editable key/value list: a stdio server's environment, a remote one's headers, in the
 /// inspector and in the add sheet alike.
 struct KeyValueEditor: View {
-    let title: String
-    /// What one row is, spoken. The section label tells sighted users which list this is; the noun
-    /// is what tells everyone else, so it stays specific — "environment variable", not "entry".
-    let noun: String
-    let placeholder: (key: String, value: String)
+    /// The section label tells sighted users which list this is; the noun is what tells everyone
+    /// else, so it stays specific — "environment variable", not "entry".
+    enum Kind {
+        case env, headers
+
+        var title: String {
+            switch self {
+            case .env: "Env"
+            case .headers: "Headers"
+            }
+        }
+
+        var noun: String {
+            switch self {
+            case .env: "environment variable"
+            case .headers: "header"
+            }
+        }
+
+        var placeholder: (key: String, value: String) {
+            switch self {
+            case .env: ("KEY", "value")
+            case .headers: ("Header", "value")
+            }
+        }
+    }
+
+    let kind: Kind
     @Binding var rows: [KeyValueRow]
-    /// Run when a row is submitted or removed. The inspector is editing a live server and pushes
-    /// the change; the add sheet is still assembling one and has nothing to push yet.
-    var commit: () -> Void = {}
+    /// Runs when a row is submitted or removed. The add sheet passes nothing and still wants the
+    /// action installed: it is what keeps Return in the field, off the sheet's default button.
+    let commit: () -> Void
+
+    init(_ kind: Kind, rows: Binding<[KeyValueRow]>, commit: @escaping () -> Void = {}) {
+        self.kind = kind
+        self._rows = rows
+        self.commit = commit
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.xs) {
             HStack {
-                SectionLabel(title)
+                SectionLabel(kind.title)
                 Spacer(minLength: 0)
                 Button { rows.append(KeyValueRow(key: "", value: "")) } label: {
                     Image(systemName: "plus")
                 }
                 .buttonStyle(.pressable)
                 .foregroundStyle(.secondary)
-                .accessibilityLabel("Add \(noun)")
+                .accessibilityLabel("Add \(kind.noun)")
             }
             ForEach($rows) { $row in
                 HStack(spacing: Space.xs) {
-                    TextField(placeholder.key, text: $row.key)
-                        .onSubmit(commit)
-                    TextField(placeholder.value, text: $row.value)
-                        .onSubmit(commit)
+                    TextField(kind.placeholder.key, text: $row.key)
+                    TextField(kind.placeholder.value, text: $row.value)
                     Button {
                         rows.removeAll { $0.id == row.id }
                         commit()
@@ -39,12 +66,13 @@ struct KeyValueEditor: View {
                     }
                     .buttonStyle(.pressable)
                     .foregroundStyle(.secondary)
-                    .accessibilityLabel("Remove \(row.key.isEmpty ? "empty" : row.key) \(noun)")
+                    .accessibilityLabel("Remove \(row.key.isEmpty ? "empty" : row.key) \(kind.noun)")
                 }
                 .textFieldStyle(.roundedBorder)
                 .font(Typography.mono)
             }
         }
+        .onSubmit(commit)
     }
 }
 
@@ -64,11 +92,9 @@ extension [KeyValueRow] {
 
     /// Rows with a blank key are the half-typed ones; they are dropped rather than sent as "".
     var dictionary: [String: String] {
-        var out: [String: String] = [:]
-        for row in self {
+        Dictionary(compactMap { row -> (String, String)? in
             let key = row.key.trimmingCharacters(in: .whitespaces)
-            if !key.isEmpty { out[key] = row.value }
-        }
-        return out
+            return key.isEmpty ? nil : (key, row.value)
+        }, uniquingKeysWith: { _, later in later })
     }
 }

@@ -273,8 +273,7 @@ struct InspectorView: View {
                 switch status.server.kind {
                 case .stdio:
                     args(status)
-                    KeyValueEditor(title: "Env", noun: "environment variable",
-                                   placeholder: ("KEY", "value"), rows: $envRows) { commitEnv(status) }
+                    KeyValueEditor(.env, rows: $envRows) { commitEnv(status) }
                 case .remote:
                     headers(status)
                 }
