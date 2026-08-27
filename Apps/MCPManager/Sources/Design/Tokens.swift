@@ -61,6 +61,10 @@ enum Surface {
     static let base = scheme(light: .white, lightAlpha: 0.68, dark: .black, darkAlpha: 0.42)
     static let card = scheme(light: .white, lightAlpha: 0.38, dark: .white, darkAlpha: 0.075)
     static let control = scheme(light: .black, lightAlpha: 0.055, dark: .white, darkAlpha: 0.085)
+    /// The one fill that sits *on* a control rather than in it — the plate under a segmented
+    /// control's selected segment — so it lightens in both schemes instead of following the control
+    /// tier's inversion.
+    static let raised = scheme(light: .white, lightAlpha: 0.92, dark: .white, darkAlpha: 0.18)
     static let hairline = scheme(light: .black, lightAlpha: 0.09, dark: .white, darkAlpha: 0.11)
 
     /// Accent tints need more opacity in dark for the same perceived presence.

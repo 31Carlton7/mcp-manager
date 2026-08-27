@@ -312,15 +312,15 @@ struct ClientFilterMenu: View {
     }
 }
 
-/// The navigation strip: equal-width text segments inside a card-tier container. The active segment
-/// takes the accent foreground over the accent tint; inactive ones recede rather than draw anything
-/// of their own.
+/// The navigation strip: equal-width segments under a sliding plate, in the same glass capsule the
+/// header's other controls wear. The plate is a single view that moves between segments rather than
+/// one background fading out while another fades in, so the strip animates in place.
 struct TabStrip<Value: Hashable>: View {
     private let options: [Value]
     private let title: (Value) -> String
     @Binding private var selection: Value
 
-    @Environment(\.colorScheme) private var colorScheme
+    @Namespace private var plate
 
     init(_ options: [Value], selection: Binding<Value>, title: @escaping (Value) -> String) {
         self.options = options
@@ -336,29 +336,33 @@ struct TabStrip<Value: Hashable>: View {
                     selection = option
                 } label: {
                     Text(title(option))
-                        .font(.system(size: 13.5, weight: .semibold))
-                        .foregroundStyle(active ? Color.accentColor : Color.secondary.opacity(0.86))
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(active ? Color.primary : Color.secondary)
                         // `maxWidth: .infinity` is what makes the segments equal inside a strip that
                         // has width to give — but under `fixedSize`, as in the main window's header,
-                        // infinity resolves to the label's ideal width and the tint would end
+                        // infinity resolves to the label's ideal width and the plate would end
                         // exactly where the word does. Hence the horizontal padding as well.
                         .padding(.horizontal, Space.card)
                         .frame(maxWidth: .infinity)
-                        .frame(height: 30)
-                        .background(active ? Surface.accentTint(colorScheme) : .clear,
-                                    in: .rect(cornerRadius: Radius.row, style: .continuous))
-                        .contentShape(.rect)
+                        .frame(height: 22)
+                        .background {
+                            if active {
+                                Capsule()
+                                    .fill(Surface.raised)
+                                    .overlay {
+                                        Capsule().strokeBorder(Surface.hairline, lineWidth: Stroke.hairline)
+                                    }
+                                    .matchedGeometryEffect(id: "plate", in: plate)
+                            }
+                        }
+                        .contentShape(.capsule)
                 }
                 .buttonStyle(.plain)
                 .accessibilityAddTraits(active ? [.isSelected, .isButton] : .isButton)
             }
         }
-        .padding(Space.xs)
-        .background(Surface.card, in: .rect(cornerRadius: Radius.card, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                .strokeBorder(Surface.hairline, lineWidth: Stroke.hairline)
-        }
-        .animation(.snappy(duration: 0.15), value: selection)
+        .padding(3)
+        .pill()
+        .animation(.snappy(duration: 0.22), value: selection)
     }
 }

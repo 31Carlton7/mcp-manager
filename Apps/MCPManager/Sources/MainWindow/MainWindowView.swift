@@ -188,43 +188,79 @@ struct MainWindowView: View {
 
     private func header(count: Int) -> some View {
         GlassEffectContainer(spacing: Space.s) {
-            HStack(spacing: Space.s) {
-                TabStrip(Tab.allCases, selection: $tab, title: \.rawValue)
-                    .fixedSize()
-                    .layoutPriority(2)
-                // The catalog brings its own search and has nothing to filter.
-                if tab == .servers {
-                    ClientFilterMenu(clients: daemon.installedClients, selection: $clientFilter)
-                    kindMenu
-                    // First thing to give way when the window narrows; the grid answers the
-                    // same question.
-                    Text("\(count) \(count == 1 ? "server" : "servers")")
-                        .font(Typography.listValue)
-                        .monospacedDigit()
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .layoutPriority(-1)
-                }
-                Spacer(minLength: Space.m)
-                if tab == .servers {
-                    SearchField(prompt: "Search", text: $query, fieldWidth: 150)
-                        .fixedSize()
-                }
-                Button("Add", systemImage: "plus") { addRequest = AddRequest() }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!daemon.isConnected)
-                SettingsLink {
-                    Image(systemName: "gearshape")
-                }
-                .circleGlassButton()
-                .help("Settings")
-                .accessibilityLabel("Settings")
+            // Widest first: SwiftUI takes the first row whose ideal width fits what the window has
+            // left after the inspector. Without this the row keeps its full width regardless, and a
+            // window narrower than that width clips it at both edges rather than laying it out.
+            ViewThatFits(in: .horizontal) {
+                headerRow(count: count, density: .full)
+                headerRow(count: count, density: .tight)
+                headerRow(count: count, density: .compact)
             }
         }
         // `.hiddenTitleBar` puts the content under the window controls, so the row starts below them.
         .padding(.top, 30)
         .padding(.horizontal, Space.l)
         .padding(.bottom, Space.m)
+    }
+
+    /// What the header sheds as the window narrows. Nothing is lost on the way down: the filters the
+    /// full row spells out are the same ones `filterMenu` holds, and the count is a reading of the
+    /// grid right below it.
+    private enum HeaderDensity { case full, tight, compact }
+
+    @ViewBuilder
+    private func headerRow(count: Int, density: HeaderDensity) -> some View {
+        HStack(spacing: Space.s) {
+            TabStrip(Tab.allCases, selection: $tab, title: \.rawValue)
+                .fixedSize()
+            // The catalog brings its own search and has nothing to filter.
+            if tab == .servers {
+                if density == .full {
+                    ClientFilterMenu(clients: daemon.installedClients, selection: $clientFilter)
+                    kindMenu
+                } else {
+                    filterMenu
+                }
+                if density != .compact {
+                    Text("\(count) \(count == 1 ? "server" : "servers")")
+                        .font(Typography.listValue)
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: Space.m)
+            if tab == .servers {
+                // Held at a readable width and pushed right while the window can afford it. At the
+                // last density it takes whatever slack is left instead, which is what keeps a search
+                // field on screen down to the window's minimum width.
+                SearchField(prompt: "Search", text: $query,
+                            fieldWidth: density == .compact ? nil : 150)
+                    .fixedSize(horizontal: density != .compact, vertical: false)
+                    .frame(maxWidth: density == .compact ? 200 : nil)
+            }
+            Button {
+                addRequest = AddRequest()
+            } label: {
+                // The word is the first thing to go: + on a filled button is unambiguous, and the
+                // help tag and the accessibility label both still say it in full.
+                if density == .compact {
+                    Image(systemName: "plus")
+                } else {
+                    Label("Add", systemImage: "plus")
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(!daemon.isConnected)
+            .help("Add a server")
+            .accessibilityLabel("Add a server")
+            SettingsLink {
+                Image(systemName: "gearshape")
+            }
+            .circleGlassButton()
+            .help("Settings")
+            .accessibilityLabel("Settings")
+        }
     }
 
     private var kindMenu: some View {
@@ -241,6 +277,37 @@ struct MainWindowView: View {
         .fixedSize()
         .accessibilityLabel("Kind filter")
     }
+
+    /// Both filter menus folded into one button, for the widths where spelling them out would push
+    /// the row past the window. Filled while a filter is on, because at these widths the label that
+    /// would otherwise say so is the thing that has been folded away.
+    private var filterMenu: some View {
+        Menu {
+            Section("Clients") {
+                Button("All clients") { clientFilter = nil }
+                ForEach(daemon.installedClients) { client in
+                    Button(client.displayName) { clientFilter = client.id }
+                }
+            }
+            Section("Kinds") {
+                Button("All kinds") { kindFilter = nil }
+                Button("stdio") { kindFilter = .stdio }
+                Button("remote") { kindFilter = .remote }
+            }
+        } label: {
+            Image(systemName: hasFilter
+                  ? "line.3.horizontal.decrease.circle.fill"
+                  : "line.3.horizontal.decrease.circle")
+        }
+        .menuStyle(.button)
+        .menuIndicator(.hidden)
+        .circleGlassButton()
+        .fixedSize()
+        .help("Filter servers")
+        .accessibilityLabel("Filters")
+    }
+
+    private var hasFilter: Bool { clientFilter != nil || kindFilter != nil }
 
     // MARK: grid
 
