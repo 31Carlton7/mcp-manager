@@ -1,12 +1,9 @@
 import Dispatch
 import Foundation
-import os
 import MCPMCore
 import MCPMControl
 import MCPMDaemon
 import MCPMGateway
-
-let log = Logger(subsystem: "co.charmtechnologies.mcpmd", category: "main")
 
 /// The daemon: sync the library out to every client, watch their configs, and serve the app over
 /// the control socket.

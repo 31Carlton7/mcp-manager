@@ -1,9 +1,14 @@
 import Foundation
+import os
 import MCPMCore
 import MCPMControl
 import MCPMGateway
 
 public let daemonVersion = MCPMVersion.current
+
+/// The background service's log, shared with the `mcpmd` executable so everything it emits lands
+/// under one subsystem in Console.
+public let log = Logger(subsystem: "co.charmtechnologies.mcpmd", category: "main")
 
 public enum HandlerError: Error, CustomStringConvertible {
     case notFound(String)
@@ -82,7 +87,10 @@ public struct Handlers: Sendable {
 
     public func handle(_ req: ControlRequest) async throws -> ControlResult {
         switch req.command {
-        case .hello:
+        case .hello(let p):
+            // The one place both versions are in hand. An app driving a daemon it did not ship
+            // with is otherwise invisible, and explains a whole class of reports.
+            log.notice("app \(p.appVersion, privacy: .public) connected to daemon \(daemonVersion, privacy: .public)")
             return .hello(daemonVersion: daemonVersion, apiVersion: controlAPIVersion)
         case .status, .subscribe:
             return .status(await status())

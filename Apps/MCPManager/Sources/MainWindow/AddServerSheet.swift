@@ -53,13 +53,6 @@ struct AddServerSheet: View {
         let name: String
     }
 
-    /// Identity that survives editing: keying rows by their key would renumber the list mid-word.
-    private struct KeyValueRow: Identifiable {
-        let id = UUID()
-        var key: String
-        var value: String
-    }
-
     /// The advanced fields only make sense for a single server; a JSON block with several is taken
     /// as-is.
     private var single: ExternalServer? { parsed.servers.count == 1 ? parsed.servers[0] : nil }
@@ -394,9 +387,11 @@ struct AddServerSheet: View {
             switch single?.kind {
             case .stdio:
                 argsField
-                rows("Env", placeholder: ("KEY", "value"), rows: $envRows)
+                KeyValueEditor(title: "Env", noun: "environment variable",
+                               placeholder: ("KEY", "value"), rows: $envRows)
             case .remote:
-                rows("Headers", placeholder: ("Header", "value"), rows: $headerRows)
+                KeyValueEditor(title: "Headers", noun: "header",
+                               placeholder: ("Header", "value"), rows: $headerRows)
                 authField
             case nil:
                 EmptyView()
@@ -411,38 +406,6 @@ struct AddServerSheet: View {
                 .textFieldStyle(.roundedBorder)
                 .font(Typography.mono)
                 .labelsHidden()
-        }
-    }
-
-    private func rows(_ title: String, placeholder: (String, String),
-                      rows: Binding<[KeyValueRow]>) -> some View {
-        VStack(alignment: .leading, spacing: Space.xs) {
-            HStack {
-                SectionLabel(title)
-                Spacer(minLength: 0)
-                Button { rows.wrappedValue.append(KeyValueRow(key: "", value: "")) } label: {
-                    Image(systemName: "plus")
-                }
-                .buttonStyle(.pressable)
-                .foregroundStyle(.secondary)
-                .accessibilityLabel("Add \(title) entry")
-            }
-            ForEach(rows) { $row in
-                HStack(spacing: Space.s) {
-                    TextField(placeholder.0, text: $row.key)
-                    TextField(placeholder.1, text: $row.value)
-                    Button {
-                        rows.wrappedValue.removeAll { $0.id == row.id }
-                    } label: {
-                        Image(systemName: "minus")
-                    }
-                    .buttonStyle(.pressable)
-                    .foregroundStyle(.secondary)
-                    .accessibilityLabel("Remove \(row.key.isEmpty ? "empty" : row.key) entry")
-                }
-                .textFieldStyle(.roundedBorder)
-                .font(Typography.mono)
-            }
         }
     }
 
@@ -543,8 +506,8 @@ struct AddServerSheet: View {
         guard let single else { return }
         if !nameEdited { name = single.name }
         argsText = single.args.joined(separator: " ")
-        envRows = single.env.sorted { $0.key < $1.key }.map { KeyValueRow(key: $0.key, value: $0.value) }
-        headerRows = single.headers.sorted { $0.key < $1.key }.map { KeyValueRow(key: $0.key, value: $0.value) }
+        envRows = .init(single.env)
+        headerRows = .init(single.headers)
     }
 
     /// Fills the form from a catalog entry: the paste well gets the URL, or the command line, or
@@ -616,9 +579,9 @@ struct AddServerSheet: View {
         let settled = settledInspection(for: server)
         return AddServerParams(name: trimmedName, kind: server.kind, command: server.command,
                                args: server.kind == .stdio ? SmartPasteParser.shellSplit(argsText) : [],
-                               env: server.kind == .stdio ? dictionary(envRows) : [:],
+                               env: server.kind == .stdio ? envRows.dictionary : [:],
                                url: server.url,
-                               headers: server.kind == .remote ? dictionary(headerRows) : [:],
+                               headers: server.kind == .remote ? headerRows.dictionary : [:],
                                // What the endpoint answered to beats what the paste guessed: an
                                // SSE server behind a URL that doesn't say so is exactly the case
                                // the check exists for.
@@ -627,15 +590,5 @@ struct AddServerSheet: View {
                                headerName: credential ? trimmedHeaderName : nil,
                                headerValue: credential ? headerValue : nil,
                                autoDetectAuth: settled == nil)
-    }
-
-    /// Rows with a blank key are the half-typed ones; they are dropped rather than sent as "".
-    private func dictionary(_ rows: [KeyValueRow]) -> [String: String] {
-        var out: [String: String] = [:]
-        for row in rows {
-            let key = row.key.trimmingCharacters(in: .whitespaces)
-            if !key.isEmpty { out[key] = row.value }
-        }
-        return out
     }
 }
