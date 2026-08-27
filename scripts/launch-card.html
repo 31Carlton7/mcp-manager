@@ -1,0 +1,92 @@
+<!doctype html><html><head><meta charset="utf-8">
+<!--
+  The still cards in the launch video, and the plates the app footage is composited onto.
+  Rendered by scripts/render-launch-video.sh; ?card= picks which one.
+-->
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    width:1600px; height:900px; overflow:hidden;
+    font-family:"Geist",-apple-system,system-ui,sans-serif;
+    background:
+      radial-gradient(1100px 700px at 16% 18%, #ffffff 0%, rgba(255,255,255,0) 62%),
+      linear-gradient(150deg, #fdfdfd 0%, #f4f4f6 55%, #ececed 100%);
+    position:relative; color:#111113;
+  }
+
+  /* The plate the window is composited onto. Same rect and radius as #mask, which is what gives
+     the footage its rounded corners — the capture is square-edged and would otherwise read as a
+     screenshot pasted on a slide. */
+  .plate {
+    position:absolute; left:100px; top:52px; width:1400px; height:676px;
+    background:#f7f7f8; border-radius:14px;
+    box-shadow:0 26px 60px rgba(0,0,0,0.13), 0 6px 16px rgba(0,0,0,0.07);
+  }
+  .caption { position:absolute; left:100px; right:100px; top:772px; }
+  .caption h2 { font-size:44px; font-weight:600; letter-spacing:-0.028em; }
+  .caption p { margin-top:8px; font-size:25px; font-weight:400; color:#8e8e93; letter-spacing:-0.01em; }
+
+  .full { position:absolute; left:120px; right:120px; }
+  .brand { top:96px; display:flex; align-items:center; gap:18px; }
+  .brand img { width:56px; height:56px; border-radius:12.5px; }
+  .brand span { font-size:31px; font-weight:500; color:rgba(0,0,0,0.52); letter-spacing:-0.01em; }
+  h1 { font-size:92px; font-weight:700; line-height:1.12; letter-spacing:-0.035em; }
+  h1 .rest { color:#b4b4b7; }
+  .icons { display:flex; align-items:center; gap:22px; }
+  .icons img {
+    width:104px; height:104px; border-radius:23.3px;   /* 22.4% squircle ratio, as on the site */
+    border:1px solid rgba(0,0,0,0.07); background:#fff;
+    box-shadow:0 10px 24px rgba(0,0,0,0.11), 0 2px 6px rgba(0,0,0,0.06);
+  }
+  .domain {
+    display:inline-flex; align-items:center; height:82px; padding:0 40px;
+    background:#131315; color:#fff; border-radius:999px;
+    font-size:33px; font-weight:700; letter-spacing:-0.015em;
+  }
+  /* Tracking, not a ligature setting: the mono hyphen is wide enough that `--cask` reads as one
+     long dash when the glyphs touch. */
+  code {
+    display:inline-block; font-family:Menlo,ui-monospace,monospace;
+    font-size:27px; letter-spacing:1.1px; color:#3a3a3f;
+    background:rgba(0,0,0,0.045); border:1px solid rgba(0,0,0,0.07);
+    border-radius:12px; padding:16px 24px;
+  }
+  .hidden { display:none; }
+</style></head><body>
+
+<div id="shot" class="hidden">
+  <div class="plate"></div>
+  <div class="caption"><h2 id="cap"></h2><p id="sub"></p></div>
+</div>
+
+<div id="title" class="hidden">
+  <div class="full brand"><img src="ASSETS/icon.png"><span>MCP Manager</span></div>
+  <h1 class="full" style="top:330px">Every MCP server, every client.<br><span class="rest">One menu bar app.</span></h1>
+  <div class="full icons" style="top:640px"><img src="ASSETS/claude.png"><img src="ASSETS/cursor.png"><img src="ASSETS/codex.png"></div>
+</div>
+
+<div id="end" class="hidden">
+  <div class="full brand"><img src="ASSETS/icon.png"><span>MCP Manager</span></div>
+  <h1 class="full" style="top:300px">Free and open source.<br><span class="rest">For macOS.</span></h1>
+  <div class="full" style="top:560px"><code>brew install --cask 31carlton7/tap/mcp-manager</code></div>
+  <div class="full" style="top:690px"><span class="domain">mcpmanager.space</span></div>
+</div>
+
+<!-- White where the footage shows through, black everywhere else: ffmpeg's alphamerge reads it
+     as the clip's alpha channel. -->
+<div id="mask" class="hidden" style="position:absolute;inset:0;background:#000">
+  <div style="position:absolute;left:100px;top:52px;width:1400px;height:676px;background:#fff;border-radius:14px"></div>
+</div>
+
+<script>
+  const q = new URLSearchParams(location.search);
+  const card = q.get("card");
+  document.getElementById(card).classList.remove("hidden");
+  if (card === "shot") {
+    document.getElementById("cap").textContent = q.get("cap") || "";
+    document.getElementById("sub").textContent = q.get("sub") || "";
+  }
+  if (card === "mask") document.body.style.background = "#000";
+</script>
+</body></html>
