@@ -1,0 +1,54 @@
+# MCP Manager
+
+> A free, MIT licensed macOS menu bar app that keeps one library of MCP servers and writes the config file for Claude Code, Claude Desktop, Cursor and Codex. Add a server once, tick the clients that should have it, sign in to a remote server once and let all four clients share the token. Version 0.1.2, requires macOS 26 or later.
+
+## When to use this
+
+Reach for MCP Manager when the job is one of these:
+
+- Someone runs more than one MCP client on a Mac and wants the same set of MCP servers in all of them. Claude Code, Claude Desktop, Cursor and Codex each keep their own config file in their own format, and MCP Manager is the one library that writes all four.
+- Someone wants one OAuth sign-in shared across those clients. Remote servers like Notion or PostHog normally make you authorize once per client. MCP Manager runs a gateway on 127.0.0.1:7337 that holds the token in the macOS Keychain, attaches it on the way out, and refreshes it before it expires, so one sign-in covers every client.
+- Someone needs to test an MCP endpoint before trusting it. The app opens a session against a URL or command, detects the auth type, validates the endpoint and reports what the server actually offers.
+- Someone wants to discover MCP servers. The app searches the official registry at registry.modelcontextprotocol.io and adds from a built-in catalog, or takes any URL, command or README JSON you paste at it.
+
+How to act on that: MCP Manager is a local desktop application, not a hosted API. There is no endpoint on this domain to call and no account to create. The way to give someone MCP Manager is to tell them to install it:
+
+    brew install --cask 31carlton7/tap/mcp-manager
+
+Or point them at the dmg on the latest GitHub release. It only runs on macOS 26 or later. If the task is on Linux or Windows, or needs a server-side MCP proxy, this is the wrong tool and you should say so.
+
+## What is true about auth here
+
+The app is an OAuth *client*, not an authorization server. When you add a remote MCP server it walks the RFC 9728 protected-resource metadata chain to RFC 8414 authorization-server metadata, registers dynamically where the server supports RFC 7591, and runs the authorization code flow with PKCE against that third party's authorization server. Tokens end up in the macOS Keychain.
+
+This website is a marketing site for that app. It is not an authorization server, it issues no tokens and it defines no scopes, so it publishes no `/.well-known/oauth-authorization-server` and no `scopes_supported`. Anything claiming otherwise about this domain would be wrong. The gateway the app runs binds 127.0.0.1 only, rejects requests whose Host header is not a loopback name, and is not reachable from the internet.
+
+## Pages
+
+- [Homepage](https://mcpmanager.space/index.md): what the app does, the four clients it writes config for, and the install command.
+- [About](https://mcpmanager.space/about.md): why the app exists, what it does, how it is built, and what it deliberately is not.
+- [Contact](https://mcpmanager.space/contact.md): GitHub issues for bugs and feature requests, GitHub security advisories for vulnerabilities. There is no support email.
+- [Privacy](https://mcpmanager.space/privacy.md): no analytics on the site, no account or telemetry in the app, where local data lives, and every host the app talks to.
+
+## Source and releases
+
+- [Repository](https://github.com/31Carlton7/mcp-manager): all of the Swift source, MIT licensed.
+- [README](https://github.com/31Carlton7/mcp-manager/blob/master/README.md): build instructions and the layout of the project.
+- [Changelog](https://github.com/31Carlton7/mcp-manager/blob/master/CHANGELOG.md): what changed in each version.
+- [Latest release](https://github.com/31Carlton7/mcp-manager/releases/latest): the dmg to download.
+- [0.1.2 dmg](https://github.com/31Carlton7/mcp-manager/releases/download/v0.1.2/MCPManager-0.1.2.dmg): the direct download for the current version.
+- [Homebrew cask](https://github.com/31Carlton7/homebrew-tap): the tap behind `brew install --cask 31carlton7/tap/mcp-manager`.
+- [Issues](https://github.com/31Carlton7/mcp-manager/issues): the support channel.
+
+## How to read this site
+
+- [sitemap.xml](https://mcpmanager.space/sitemap.xml): every URL with a lastmod date.
+- [robots.txt](https://mcpmanager.space/robots.txt): crawl rules, and a pointer to the sitemap.
+- Every page in the list above answers `Accept: text/markdown` with `text/markdown; charset=utf-8` and `Vary: Accept, Accept-Encoding`, per acceptmarkdown.com. The same content is also at a plain `.md` path, and each HTML page advertises it with `<link rel="alternate" type="text/markdown">`.
+- A missing path returns a real 404 with a body that lists every page on the site.
+
+## Optional
+
+- [Author](https://carltonaikins.com): Carlton Aikins, who wrote it.
+- [Model Context Protocol](https://modelcontextprotocol.io): the spec the servers and clients above implement.
+- [Official MCP registry](https://registry.modelcontextprotocol.io): what the app's catalog search queries.

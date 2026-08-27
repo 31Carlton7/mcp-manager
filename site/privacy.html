@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy for MCP Manager</title>
+<meta name="description" content="No analytics, no cookies, no account, no telemetry. Where your data lives, what the app connects to, and what the website does not collect.">
+<meta property="og:title" content="Privacy for MCP Manager">
+<meta property="og:description" content="No analytics, no cookies, no account, no telemetry. Where your data lives, what the app connects to, and what the website does not collect.">
+<meta property="og:url" content="https://mcpmanager.space/privacy">
+<meta property="og:image" content="https://mcpmanager.space/assets/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:site" content="@31carlton7">
+<meta name="twitter:image" content="https://mcpmanager.space/assets/og.png">
+<link rel="icon" type="image/png" href="/assets/icon.png">
+<link rel="canonical" href="https://mcpmanager.space/privacy">
+<link rel="alternate" type="text/markdown" href="/privacy.md">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&family=Geist+Mono:wght@400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/assets/site.css">
+</head>
+<body>
+
+<header class="rail">
+  <a href="/"><img src="/assets/icon.png" alt=""></a>
+  <span>MCP Manager</span>
+</header>
+
+<main class="doc rail">
+  <h1>Privacy</h1>
+  <p>Short version: this website has no analytics and no cookies, and the app has no account and no telemetry. Nothing you do in MCP Manager is reported anywhere.</p>
+  <p>The long version is below, because "we respect your privacy" is worth nothing without the specifics.</p>
+  <h2>This website</h2>
+  <p><code>mcpmanager.space</code> is a handful of static files. There is no analytics script, no tag manager, no pixel, no A/B testing, no cookie banner, because there are no cookies to warn you about. The page sets nothing in your browser's storage and there is no JavaScript on it beyond a copy-to-clipboard button.</p>
+  <p>Two things are worth naming anyway, because they are true:</p>
+  <ul>
+    <li>The page loads its typeface from Google Fonts (<code>fonts.googleapis.com</code> and <code>fonts.gstatic.com</code>). That request goes to Google, and Google can see your IP address and user agent when it happens.</li>
+    <li>The site is hosted on Vercel, which keeps ordinary server request logs the way every host does. Those logs are Vercel's, they are not read for any product purpose, and there is nothing in them beyond what any web server records.</li>
+  </ul>
+  <p>No form on this site asks you for anything, so there is nothing to submit and no mailing list to end up on.</p>
+  <h2>The app</h2>
+  <p>MCP Manager runs entirely on your Mac. There is no MCP Manager account, no sign-in to us, no server of ours anywhere in the path, and no crash reporter, analytics SDK or update checker built into the app.</p>
+  <p>Where your data lives:</p>
+  <ul>
+    <li>Your server library, settings and config backups sit in <code>~/.mcpm</code> on your own disk.</li>
+    <li>OAuth tokens go in the macOS Keychain. They are never written into a client's config file and never into the library file.</li>
+    <li>The gateway that shares one sign-in across your clients binds <code>127.0.0.1</code> and nothing else, on port 7337 by default. It is not reachable from your network or from the internet, and it rejects requests whose Host header is not a loopback name.</li>
+    <li>Every config file is copied before it is written, so an import you did not want can be undone from the backup.</li>
+  </ul>
+  <h2>What the app connects to</h2>
+  <p>The app makes network requests, but only ones you asked for:</p>
+  <ul>
+    <li>The MCP servers in your own library, when a client uses them or when you press Test.</li>
+    <li><code>registry.modelcontextprotocol.io</code>, when you search the official registry from the catalog.</li>
+    <li>The website of a server's vendor, to fetch that server's favicon for the list.</li>
+  </ul>
+  <p>That is the whole list. Nothing is sent to Charm Technologies, because there is nothing on our end to send it to.</p>
+  <h2>Your rights</h2>
+  <p>There is no personal data to request, correct or delete, because none is collected. If you want the app's local data gone, <code>brew uninstall --zap --cask mcp-manager</code> removes <code>~/.mcpm</code> and the app's cache. Tokens in the Keychain are separate: delete those in Keychain Access.</p>
+  <h2>Changes</h2>
+  <p>If this ever changes, it changes in a commit you can read, in a public repository, along with the code that made it change.</p>
+  <p>Questions about any of this go to <a href="https://github.com/31Carlton7/mcp-manager/issues">GitHub issues</a>.</p>
+  <p>Last updated 27 August 2026.</p>
+</main>
+
+<footer class="rail">
+  <a class="btn primary" href="https://github.com/31Carlton7/mcp-manager/releases/latest">
+    Download the dmg
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 8h9M8.5 4.5 12 8l-3.5 3.5"/></svg>
+  </a>
+  <p class="fine">MCP Manager is free and <a href="https://github.com/31Carlton7/mcp-manager/blob/master/LICENSE">MIT licensed</a>, made by <a href="https://carltonaikins.com">Carlton Aikins</a> &middot; <a href="https://github.com/31Carlton7/mcp-manager">GitHub</a> &middot; Requires macOS 26</p>
+  <p class="fine"><a href="/">Home</a> &middot; <a href="/about">About</a> &middot; <a href="/contact">Contact</a> &middot; <a href="/privacy">Privacy</a> &middot; <a href="/llms.txt">llms.txt</a></p>
+</footer>
+
+</body>
+</html>

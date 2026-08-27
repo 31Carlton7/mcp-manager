@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>About MCP Manager</title>
+<meta name="description" content="MCP Manager keeps one library of MCP servers and writes the config file for Claude Code, Claude Desktop, Cursor and Codex. What it does, how it is built, and who made it.">
+<meta property="og:title" content="About MCP Manager">
+<meta property="og:description" content="MCP Manager keeps one library of MCP servers and writes the config file for Claude Code, Claude Desktop, Cursor and Codex. What it does, how it is built, and who made it.">
+<meta property="og:url" content="https://mcpmanager.space/about">
+<meta property="og:image" content="https://mcpmanager.space/assets/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:site" content="@31carlton7">
+<meta name="twitter:image" content="https://mcpmanager.space/assets/og.png">
+<link rel="icon" type="image/png" href="/assets/icon.png">
+<link rel="canonical" href="https://mcpmanager.space/about">
+<link rel="alternate" type="text/markdown" href="/about.md">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&family=Geist+Mono:wght@400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/assets/site.css">
+</head>
+<body>
+
+<header class="rail">
+  <a href="/"><img src="/assets/icon.png" alt=""></a>
+  <span>MCP Manager</span>
+</header>
+
+<main class="doc rail">
+  <h1>About MCP Manager</h1>
+  <p>MCP Manager is a menu bar app for macOS. It keeps one library of MCP servers and writes the config file for every MCP client on your Mac.</p>
+  <h2>Why it exists</h2>
+  <p>You add an MCP server to Claude Code. Then you want the same server in Cursor, so you open a second file and paste it again. Then Claude Desktop, which wants a different shape. Then Codex, which is TOML instead of JSON. Four files, four formats, and the day a token rotates you get to do the whole round trip again.</p>
+  <p>That is the entire problem this app solves. Add a server once, tick the clients that should have it, and MCP Manager writes each client's own file in that client's own format. It copies every file before it touches it, and it imports the servers you already have instead of asking you to start over.</p>
+  <h2>What it does</h2>
+  <ul>
+    <li>One library of servers, with a checkbox per client on each one.</li>
+    <li>Writes config for Claude Code, Claude Desktop, Cursor and Codex.</li>
+    <li>One OAuth sign-in per remote server, shared by all four clients. A gateway on <code>127.0.0.1:7337</code> attaches the token on the way out and refreshes it before it expires, so you sign in to Notion or PostHog once instead of four times.</li>
+    <li>Search the official MCP registry from inside the app, or paste a URL, a command, or the JSON blob out of somebody's README. The endpoint gets validated and the auth type detected for you.</li>
+    <li>Test a server before you trust it. The app opens a session, lists what the server offers, and tells you what came back.</li>
+  </ul>
+  <h2>How it is built</h2>
+  <p>Swift, top to bottom. A SwiftUI menu bar app talks to a small background daemon called <code>mcpmd</code> over a Unix domain socket, and the daemon owns the library, the config writes and the gateway. Everything runs on your machine. There is no MCP Manager account, no server of ours in the path, and no telemetry in the app.</p>
+  <p>It is MIT licensed and the whole thing is on GitHub, so you can read it before you run it.</p>
+  <h2>What it is not</h2>
+  <p>It is not a hosted service and it has no public API. <code>mcpmanager.space</code> is a marketing site: it describes the app, and the app itself is what you install. The gateway the app runs binds the loopback interface only, so nothing on the internet can reach it.</p>
+  <h2>Who made it</h2>
+  <p>Carlton Aikins, under Charm Technologies. Bugs, questions and feature requests all go to <a href="https://github.com/31Carlton7/mcp-manager/issues">GitHub issues</a>.</p>
+  <h2>Links</h2>
+  <ul>
+    <li><a href="https://github.com/31Carlton7/mcp-manager/releases/latest">Download the latest release</a></li>
+    <li><a href="https://github.com/31Carlton7/mcp-manager">Source on GitHub</a></li>
+    <li><a href="/contact">Contact</a></li>
+    <li><a href="/privacy">Privacy</a></li>
+  </ul>
+</main>
+
+<footer class="rail">
+  <a class="btn primary" href="https://github.com/31Carlton7/mcp-manager/releases/latest">
+    Download the dmg
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 8h9M8.5 4.5 12 8l-3.5 3.5"/></svg>
+  </a>
+  <p class="fine">MCP Manager is free and <a href="https://github.com/31Carlton7/mcp-manager/blob/master/LICENSE">MIT licensed</a>, made by <a href="https://carltonaikins.com">Carlton Aikins</a> &middot; <a href="https://github.com/31Carlton7/mcp-manager">GitHub</a> &middot; Requires macOS 26</p>
+  <p class="fine"><a href="/">Home</a> &middot; <a href="/about">About</a> &middot; <a href="/contact">Contact</a> &middot; <a href="/privacy">Privacy</a> &middot; <a href="/llms.txt">llms.txt</a></p>
+</footer>
+
+</body>
+</html>

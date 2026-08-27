@@ -1,0 +1,155 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: "Geist", -apple-system, "system-ui", "Helvetica Neue", Arial, sans-serif;
+  background: #fff;
+  color: rgba(0, 0, 0, 0.58);
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+.rail { padding-left: 5.5%; padding-right: 5.5%; }
+
+header { padding-top: 28px; display: flex; align-items: center; gap: 10px; }
+header img { width: 26px; height: 26px; border-radius: 7px; }
+header span { font-size: 16px; color: rgba(0, 0, 0, 0.58); }
+
+.hero { padding-top: 118px; padding-bottom: 60px; }
+.inline-icon {
+  width: 0.82em; height: 0.82em;
+  border-radius: 22.4%;                 /* Apple icon-shape ratio */
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  background: #fff;
+  vertical-align: -0.09em;
+  margin-right: 0.16em;
+}
+h1 {
+  font-size: 54px;
+  font-weight: 500;
+  line-height: 1.05;
+  letter-spacing: -0.035em;
+  max-width: 13.5em;
+  color: rgba(0, 0, 0, 0.9);
+}
+h1 .rest { color: #b2b2b2; }
+
+.buttons { display: flex; gap: 8px; margin-top: 44px; flex-wrap: wrap; }
+.btn {
+  display: inline-flex; align-items: center; gap: 7px;
+  height: 38px; padding: 0 18px;
+  background: rgba(0, 0, 0, 0.055);
+  color: rgba(0, 0, 0, 0.9);
+  font-size: 15px; font-weight: 500;
+  text-decoration: none;
+  border-radius: 999px;
+  transition: background 0.15s ease;
+}
+.btn:hover { background: rgba(0, 0, 0, 0.1); }
+.btn.primary { background: #1f1f1f; color: #fff; }
+.btn.primary:hover { background: #000; }
+.btn svg { width: 13px; height: 13px; }
+
+.label { padding-top: 110px; font-size: 16px; font-weight: 400; color: rgba(0, 0, 0, 0.58); }
+
+.media-band { padding-top: 32px; max-width: 1160px; }
+.media-band.spaced { padding-top: 110px; }
+.media-band img, .media-band video {
+  width: 100%; height: auto; display: block;
+  border-radius: 18px;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.statement { padding-top: 120px; }
+.statement h2 {
+  font-size: 32px; font-weight: 500;
+  line-height: 1.25; letter-spacing: -0.02em;
+  max-width: 22em;
+  color: rgba(0, 0, 0, 0.72);
+}
+.statement h2 .rest { color: rgba(0, 0, 0, 0.31); }
+
+.grid {
+  padding-top: 64px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 56px 48px;
+  max-width: 1160px;
+}
+.grid h3 { font-size: 20px; font-weight: 500; line-height: 1.35; letter-spacing: -0.01em; }
+.grid h3 b { font-weight: 500; color: rgba(0, 0, 0, 0.8); }
+.grid h3 span { color: rgba(0, 0, 0, 0.38); }
+
+.buttons.tight { margin-top: 24px; }
+.cmd {
+  display: inline-flex; align-items: center; gap: 14px;
+  height: 38px; padding: 0 8px 0 18px;
+  max-width: 100%; min-width: 0;
+  background: rgba(0, 0, 0, 0.055);
+  border-radius: 999px;
+}
+.cmd code {
+  display: block; min-width: 0;
+  overflow-x: auto; scrollbar-width: none;
+  font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 14px; color: rgba(0, 0, 0, 0.78); white-space: nowrap;
+}
+.cmd code::-webkit-scrollbar { display: none; }
+.cmd button {
+  flex: none;
+  height: 26px; padding: 0 12px; border: 0; border-radius: 999px;
+  background: rgba(0, 0, 0, 0.06); color: rgba(0, 0, 0, 0.6);
+  font-family: inherit; font-size: 13px; cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.cmd button:hover { background: rgba(0, 0, 0, 0.1); color: rgba(0, 0, 0, 0.9); }
+
+footer { padding-top: 140px; padding-bottom: 72px; }
+footer .fine { margin-top: 44px; font-size: 15px; color: rgba(0, 0, 0, 0.4); }
+footer .fine a { color: rgba(0, 0, 0, 0.62); text-decoration: none; }
+footer .fine a:hover { color: rgba(0, 0, 0, 0.9); }
+footer .fine + .fine { margin-top: 10px; }
+
+@media (max-width: 720px) {
+  h1 { font-size: 36px; letter-spacing: -0.025em; }
+  .statement h2 { font-size: 25px; }
+  .grid { grid-template-columns: 1fr; gap: 36px; }
+  .hero { padding-top: 72px; }
+  .cmd code { font-size: 12.5px; }
+}
+
+/* Document pages: about, contact, privacy, 404. Same rail, same type, more prose. */
+
+.doc {
+  padding-top: 96px; padding-bottom: 24px;
+  /* content-box so the rail's percentage padding sits outside the measure rather than eating it */
+  box-sizing: content-box;
+  max-width: 34em;
+}
+.doc h1 {
+  font-size: 40px;
+  max-width: none;
+  margin-bottom: 28px;
+}
+.doc p { margin-bottom: 20px; }
+.doc p a, .doc li a { color: rgba(0, 0, 0, 0.62); text-decoration: none; border-bottom: 1px solid rgba(0, 0, 0, 0.14); }
+.doc p a:hover, .doc li a:hover { color: rgba(0, 0, 0, 0.9); border-bottom-color: rgba(0, 0, 0, 0.34); }
+.doc h2 {
+  font-size: 20px; font-weight: 500;
+  line-height: 1.35; letter-spacing: -0.01em;
+  color: rgba(0, 0, 0, 0.8);
+  padding-top: 28px;
+  margin-bottom: 12px;
+}
+.doc ul { margin: 0 0 20px 0; padding-left: 1.1em; }
+.doc li { margin-bottom: 8px; }
+.doc code {
+  font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9em;
+  color: rgba(0, 0, 0, 0.78);
+}
+
+.doc-actions { display: flex; gap: 8px; margin-top: 36px; flex-wrap: wrap; }
+
+@media (max-width: 720px) {
+  .doc { padding-top: 60px; }
+  .doc h1 { font-size: 30px; }
+}
