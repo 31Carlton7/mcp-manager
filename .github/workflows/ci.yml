@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   test:
-    name: swift test + app build
+    name: swift test (debug + release) + app build
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
@@ -38,8 +38,15 @@ jobs:
 
       # Runs against the runner's real HOME, which is fine: the tests never touch client configs
       # outside a temporary directory.
-      - name: swift test
+      - name: swift test (debug)
         run: swift test
+
+      # Release builds optimize differently, and 0.1.0 shipped a crash that only existed there:
+      # cancelling `Task.sleep(for:)` freed task allocations out of order and aborted the daemon
+      # on every connection test. Debug was green throughout. This is the step that would have
+      # caught it.
+      - name: swift test (release)
+        run: swift test -c release
 
       - name: Install XcodeGen
         run: brew install xcodegen

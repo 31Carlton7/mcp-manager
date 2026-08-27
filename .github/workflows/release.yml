@@ -44,9 +44,13 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Releasing $VERSION"
 
-      # A release should not be the first time the suite runs against this commit.
-      - name: swift test
+      # A release should not be the first time the suite runs against this commit, and the
+      # release configuration is the one being shipped — see the note in ci.yml.
+      - name: swift test (debug)
         run: swift test
+
+      - name: swift test (release)
+        run: swift test -c release
 
       - name: Install XcodeGen
         run: brew install xcodegen
