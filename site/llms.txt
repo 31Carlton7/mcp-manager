@@ -44,7 +44,7 @@ This website is a marketing site for that app. It is not an authorization server
 
 - [sitemap.xml](https://mcpmanager.space/sitemap.xml): every URL with a lastmod date.
 - [robots.txt](https://mcpmanager.space/robots.txt): crawl rules, and a pointer to the sitemap.
-- Every HTML page here answers `Accept: text/markdown` with `text/markdown; charset=utf-8` and `Vary: Accept, Accept-Encoding`, per acceptmarkdown.com. The same content is also at a plain `.md` path, and each HTML page advertises it with `<link rel="alternate" type="text/markdown">`.
+- Every page in the list above answers `Accept: text/markdown` with `text/markdown; charset=utf-8` and `Vary: Accept, Accept-Encoding`, per acceptmarkdown.com. The same content is also at a plain `.md` path, and each HTML page advertises it with `<link rel="alternate" type="text/markdown">`.
 - A missing path returns a real 404 with a body that lists every page on the site.
 
 ## Optional

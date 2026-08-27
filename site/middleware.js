@@ -1,44 +1,34 @@
 import { next, rewrite } from '@vercel/functions';
+import { PAGES } from './pages.js';
 
 /**
  * Markdown content negotiation, per acceptmarkdown.com.
  *
- * Every page on this site exists twice: `about.html` for browsers and `about.md` for agents. The
- * canonical URL is the one without an extension, and this picks which of the two it returns from
- * the request's `Accept` header. `Vary` goes on both answers, because without it the first
- * response a CDN caches for a URL is the one every later client gets, whichever audience it was
- * meant for.
- *
- * The `.md` twins stay reachable on their own paths too. They cost nothing and some agents look
- * for them before they try negotiation.
+ * Every page here exists twice, `about.html` for browsers and `about.md` for agents, under one
+ * canonical extensionless URL. `Vary` goes on both answers, because without it the first response
+ * a CDN caches for a URL is the one every later client gets, whichever audience it was meant for.
  */
 
-/** The two representations this site can produce, best first. */
-const CAN_PRODUCE = ['text/markdown', 'text/html'];
-
-/** What to send when the client expressed no preference. */
+const PRODUCIBLE = ['text/html', 'text/markdown'];
 const DEFAULT_TYPE = 'text/html';
+const VARY = 'Accept, Accept-Encoding';
 
-/** Canonical path to the file that holds each representation. */
-const PAGES = {
-  '/': { 'text/html': '/index.html', 'text/markdown': '/index.md' },
-  '/about': { 'text/html': '/about.html', 'text/markdown': '/about.md' },
-  '/contact': { 'text/html': '/contact.html', 'text/markdown': '/contact.md' },
-  '/privacy': { 'text/html': '/privacy.html', 'text/markdown': '/privacy.md' },
-};
+const BY_PATH = new Map(PAGES.flatMap((page) => [[page.path, page], [page.html, page]]));
 
 export const config = {
+  // Vercel reads this by static analysis at build time, so it cannot be derived from PAGES.
+  // `npm run check` fails when it stops covering every path in the table.
   matcher: ['/', '/index.html', '/about', '/about.html', '/contact', '/contact.html', '/privacy', '/privacy.html'],
 };
 
 /**
- * Parse one `Accept` header into its entries. A fully specified type outranks a subtype wildcard,
- * which outranks the catch-all wildcard, when two entries carry the same q.
+ * Split an `Accept` header into entries. Specificity is RFC 9110's ranking: a full type outranks a
+ * subtype wildcard, which outranks the catch-all, when two entries carry the same q.
  */
 function parseAccept(header) {
   return header
     .split(',')
-    .map((entry) => {
+    .map((entry, order) => {
       const [rawType, ...params] = entry.split(';');
       const type = rawType.trim().toLowerCase();
       if (!type) return null;
@@ -50,25 +40,24 @@ function parseAccept(header) {
         q = Number.isFinite(parsed) ? Math.min(Math.max(parsed, 0), 1) : 1;
       }
       const specificity = type === '*/*' ? 0 : type.endsWith('/*') ? 1 : 2;
-      return { type, q, specificity };
+      return { type, q, specificity, order };
     })
     .filter(Boolean);
 }
 
-/**
- * What an Accept list says about one concrete media type: the q-value from the most specific entry
- * that matches it, and whether that entry rejected it outright.
- */
+/** The entry that governs one media type: most specific match, highest q among equally specific. */
 function scoreFor(mediaType, entries) {
   const [group] = mediaType.split('/');
   let best = null;
   for (const entry of entries) {
-    const matches =
-      entry.type === mediaType || entry.type === `${group}/*` || entry.type === '*/*';
-    if (!matches) continue;
-    if (!best || entry.specificity > best.specificity) best = entry;
+    if (entry.type !== mediaType && entry.type !== `${group}/*` && entry.type !== '*/*') continue;
+    const better =
+      !best ||
+      entry.specificity > best.specificity ||
+      (entry.specificity === best.specificity && entry.q > best.q);
+    if (better) best = entry;
   }
-  return { q: best ? best.q : 0, rejected: Boolean(best) && best.q === 0 };
+  return { q: best ? best.q : 0, order: best ? best.order : Infinity, rejected: best?.q === 0 };
 }
 
 /**
@@ -80,42 +69,35 @@ function scoreFor(mediaType, entries) {
  * entirely of `q=0` exclusions means "anything but these", so a type it did not name still wins.
  */
 function negotiate(header) {
-  if (!header || !header.trim()) return DEFAULT_TYPE;
+  if (!header?.trim()) return DEFAULT_TYPE;
   const entries = parseAccept(header);
   if (entries.length === 0) return DEFAULT_TYPE;
 
-  const scored = CAN_PRODUCE.map((type) => ({ type, ...scoreFor(type, entries) }));
+  const scored = PRODUCIBLE.map((type) => ({ type, ...scoreFor(type, entries) }));
   const best = Math.max(...scored.map((s) => s.q));
 
   if (best === 0) {
-    // Nothing scored. If the client named anything it does want, it wants a type this site has
-    // never heard of, and 406 is the honest answer.
     if (entries.some((entry) => entry.q > 0)) return null;
-    const allowed = scored.filter((s) => !s.rejected).map((s) => s.type);
+    const allowed = scored.filter((s) => !s.rejected);
     if (allowed.length === 0) return null;
-    return allowed.includes(DEFAULT_TYPE) ? DEFAULT_TYPE : allowed[0];
+    return allowed.some((s) => s.type === DEFAULT_TYPE) ? DEFAULT_TYPE : allowed[0].type;
   }
 
-  // Ties go to the site's default, so a browser sending `text/html` alongside a wildcard still
-  // gets HTML.
-  const winners = scored.filter((s) => s.q === best).map((s) => s.type);
-  return winners.includes(DEFAULT_TYPE) ? DEFAULT_TYPE : winners[0];
+  // A q tie is the server's to break, and header order is the only preference left inside one: an
+  // agent sending `text/markdown, text/html` gets Markdown. One wildcard matches both types
+  // through the same entry, so `*/*` from a browser or curl still lands on the default.
+  const winners = scored.filter((s) => s.q === best);
+  const firstNamed = Math.min(...winners.map((s) => s.order));
+  const preferred = winners.filter((s) => s.order === firstNamed);
+  return preferred.some((s) => s.type === DEFAULT_TYPE) ? DEFAULT_TYPE : preferred[0].type;
 }
-
-/** `/about.html` and `/about` are the same page as far as negotiation is concerned. */
-function canonicalPath(pathname) {
-  if (pathname === '/index.html') return '/';
-  const stripped = pathname.replace(/\.html$/, '');
-  return PAGES[stripped] ? stripped : pathname;
-}
-
-const VARY = 'Accept, Accept-Encoding';
 
 export default function middleware(request) {
   const url = new URL(request.url);
-  const page = PAGES[canonicalPath(url.pathname)];
+  const page = BY_PATH.get(url.pathname);
   if (!page) return next();
 
+  const alternate = `<${page.markdown}>; rel="alternate"; type="text/markdown"`;
   const chosen = negotiate(request.headers.get('accept'));
 
   if (chosen === null) {
@@ -124,8 +106,7 @@ export default function middleware(request) {
         'Not Acceptable.',
         '',
         `${url.pathname} is available as:`,
-        '  text/html',
-        '  text/markdown',
+        ...PRODUCIBLE.map((type) => `  ${type}`),
         '',
         `You sent: Accept: ${request.headers.get('accept')}`,
       ].join('\n'),
@@ -141,21 +122,13 @@ export default function middleware(request) {
   }
 
   if (chosen === 'text/markdown') {
-    // A rewrite, not a sub-request back to our own URL. Fetching ourselves would go out through
-    // the edge, which on a protected preview deployment means fetching the SSO login page and
-    // serving it as if it were the Markdown.
-    return rewrite(new URL(page['text/markdown'], url.origin), {
-      headers: {
-        link: `<${page['text/markdown']}>; rel="alternate"; type="text/markdown"`,
-        vary: VARY,
-      },
+    // A rewrite, not a sub-request back to our own URL: fetching this origin from inside a
+    // protected preview deployment returns the SSO login page, which we would then serve as
+    // Markdown.
+    return rewrite(new URL(page.markdown, url.origin), {
+      headers: { link: alternate, vary: VARY },
     });
   }
 
-  return next({
-    headers: {
-      link: `<${page['text/markdown']}>; rel="alternate"; type="text/markdown"`,
-      vary: VARY,
-    },
-  });
+  return next({ headers: { link: alternate, vary: VARY } });
 }

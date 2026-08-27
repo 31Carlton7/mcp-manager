@@ -127,6 +127,13 @@ enabled. Re-registering the login item rewrites the requirement. The app does th
 service is unreachable a few seconds after launch, or you can trigger it from Settings → Repair
 registration. Signed release builds keep a stable identity and don't run into this.
 
+### The website
+
+`site/` is static files plus one Vercel middleware that answers `Accept: text/markdown` with the
+Markdown twin of a page. The prose for About, Contact and Privacy lives only in the `.md` file, so
+in `site/`: `npm run build` regenerates the HTML and the sitemap from it, `npm run check` fails when
+what is committed has drifted from its source, and `npm test` covers the negotiation.
+
 ## Roadmap
 
 - More clients (Windsurf, Zed, VS Code) once the four in place have settled.

@@ -66,3 +66,22 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             build
+
+  site:
+    name: site pages + Accept negotiation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - run: npm ci
+        working-directory: site
+      # The document pages are generated from their .md sources, so this fails when someone edits
+      # one of the two and not the other.
+      - run: npm run check
+        working-directory: site
+      - run: npm test
+        working-directory: site

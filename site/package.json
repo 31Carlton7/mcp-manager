@@ -4,7 +4,15 @@
   "private": true,
   "description": "The static marketing site for MCP Manager, plus the routing middleware that negotiates Markdown for agents.",
   "type": "module",
+  "scripts": {
+    "build": "node scripts/build-pages.mjs",
+    "check": "node scripts/build-pages.mjs --check",
+    "test": "node --test scripts/negotiation.test.mjs"
+  },
   "dependencies": {
     "@vercel/functions": "^3.9.5"
+  },
+  "devDependencies": {
+    "marked": "^18.0.11"
   }
 }
