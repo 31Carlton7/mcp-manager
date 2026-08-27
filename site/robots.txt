@@ -1,0 +1,8 @@
+# mcpmanager.space is the marketing site for MCP Manager, a free macOS app.
+# Everything here is public and crawlable. Start at /llms.txt for a summary
+# written for agents, or /sitemap.xml for the full list of URLs.
+
+User-agent: *
+Allow: /
+
+Sitemap: https://mcpmanager.space/sitemap.xml
