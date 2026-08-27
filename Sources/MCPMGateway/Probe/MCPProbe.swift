@@ -28,6 +28,37 @@ private actor Progress {
     func set(_ r: ProbeResult) { result = r }
 }
 
+actor Deadline {
+    var expired = false
+    func expire() { expired = true }
+}
+
+/// Runs `work` and gives up on it after `timeout`, returning nil when the deadline won.
+///
+/// Deliberately a watchdog rather than two children of a task group racing each other: a group
+/// child that awaits an unstructured task's `value` and is then cancelled trips a task-allocator
+/// invariant in optimized builds, which crashed the daemon on every Test of a remote server in
+/// the 0.1.0 release build while every debug build was fine.
+func withDeadline<T: Sendable>(_ timeout: Duration,
+                                       _ work: @escaping @Sendable () async -> T) async -> T? {
+    let flow = Task(operation: work)
+    let deadline = Deadline()
+    // `Task.sleep(nanoseconds:)`, not `Task.sleep(for:)`: cancelling the generic-clock overload
+    // frees task allocations out of order and aborts the process ("freed pointer was not the last
+    // allocation") in optimized builds. This watchdog is cancelled on every successful probe.
+    let nanos = UInt64(max(0, timeout.components.seconds)) &* 1_000_000_000
+        &+ UInt64(max(0, timeout.components.attoseconds) / 1_000_000_000)
+    let watchdog = Task {
+        try? await Task.sleep(nanoseconds: nanos)
+        guard !Task.isCancelled else { return }
+        await deadline.expire()
+        flow.cancel()
+    }
+    let value = await flow.value
+    watchdog.cancel()
+    return await deadline.expired ? nil : value
+}
+
 /// A finished stdio handshake. `answered` separates "the server said no" (a JSON-RPC error, which
 /// is the message worth showing) from "the server never said anything".
 private struct Handshake: Sendable {
@@ -300,7 +331,7 @@ public enum MCPProbe {
         defer { session.invalidateAndCancel() }
 
         let progress = Progress()
-        let flow = Task { () -> ProbeResult in
+        let outcome: ProbeResult? = await withDeadline(timeout) { () -> ProbeResult in
             var partial = ProbeResult(ok: false, durationMs: 0)
             var sessionID: String?
 
@@ -354,15 +385,6 @@ public enum MCPProbe {
             return partial
         }
 
-        // `timeout` is the deadline for the whole exchange, not for each request in it.
-        let outcome: ProbeResult? = await withTaskGroup(of: ProbeResult?.self) { group in
-            group.addTask { await flow.value }
-            group.addTask { try? await Task.sleep(for: timeout); return nil }
-            let first = await group.next() ?? nil
-            group.cancelAll()
-            flow.cancel()
-            return first
-        }
         if let outcome { result = outcome; return result }
         if let partial = await progress.result {
             result = partial   // identified, the rest just never arrived
@@ -451,7 +473,7 @@ public enum MCPProbe {
         defer { session.invalidateAndCancel() }
 
         let progress = Progress()
-        let flow = Task { () -> ProbeResult in
+        let outcome: ProbeResult? = await withDeadline(timeout) { () -> ProbeResult in
             var partial = ProbeResult(ok: false, durationMs: 0)
 
             /// Posts one message to the endpoint the server named. The answer arrives on the
@@ -532,14 +554,6 @@ public enum MCPProbe {
             return partial
         }
 
-        let outcome: ProbeResult? = await withTaskGroup(of: ProbeResult?.self) { group in
-            group.addTask { await flow.value }
-            group.addTask { try? await Task.sleep(for: timeout); return nil }
-            let first = await group.next() ?? nil
-            group.cancelAll()
-            flow.cancel()
-            return first
-        }
         if let outcome { result = outcome; return result }
         if let partial = await progress.result { result = partial; return result }
         result.error = "timed out"
@@ -680,7 +694,7 @@ public enum MCPProbe {
             return result
         }
 
-        func write(_ message: [String: Any]) {
+        @Sendable func write(_ message: [String: Any]) {
             var data = encode(message)
             data.append(0x0A)
             data.withUnsafeBytes { raw in
@@ -698,7 +712,7 @@ public enum MCPProbe {
         }
 
         let progress = Progress()
-        let handshake = Task { () -> Handshake in
+        let outcome: Handshake? = await withDeadline(timeout) { () -> Handshake in
             var partial = ProbeResult(ok: false, durationMs: 0)
             var iterator = lines.makeAsyncIterator()
             func awaitResponse(id: Int) async -> [String: Any]? {
@@ -722,16 +736,6 @@ public enum MCPProbe {
             write(toolsListMessage)
             if let obj = await awaitResponse(id: 2) { partial.toolCount = toolCount(from: obj) }
             return Handshake(result: partial, answered: true)
-        }
-
-        // Race the handshake against the deadline.
-        let outcome: Handshake? = await withTaskGroup(of: Handshake?.self) { group in
-            group.addTask { await handshake.value }
-            group.addTask { try? await Task.sleep(for: timeout); return nil }
-            let first = await group.next() ?? nil
-            group.cancelAll()
-            handshake.cancel()
-            return first
         }
 
         // A child that closed stdout is on its way out; give the kernel a moment to reap it so

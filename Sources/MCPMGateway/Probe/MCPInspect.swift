@@ -316,15 +316,9 @@ extension MCPProbe {
     /// Asks a URL what it is: an MCP endpoint (over which transport, behind which kind of sign-in),
     /// something else entirely, or nothing at all. Never throws.
     public static func inspect(url: URL, timeout: Duration = .seconds(12)) async -> URLInspection {
-        let flow = Task { await inspectImpl(url: url, timeout: timeout) }
-        let outcome: URLInspection? = await withTaskGroup(of: URLInspection?.self) { group in
-            group.addTask { await flow.value }
-            group.addTask { try? await Task.sleep(for: timeout); return nil }
-            let first = await group.next() ?? nil
-            group.cancelAll()
-            flow.cancel()
-            return first
-        }
+        // Same watchdog as the probe, and for the same reason: racing a cancelled
+        // `Task.sleep(for:)` inside a task group aborts the process in optimized builds.
+        let outcome = await withDeadline(timeout) { await inspectImpl(url: url, timeout: timeout) }
         return outcome ?? URLInspection(verdict: .unreachable, detail: "timed out")
     }
 

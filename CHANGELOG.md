@@ -5,6 +5,13 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-08-27
+
+### Fixed
+- The background service aborted when you tested a remote server's connection, and when the Add
+  sheet checked a pasted URL. Cancelling `Task.sleep(for:)` frees task allocations out of order in
+  optimized builds, which only ever showed in a release build, so every debug run looked fine.
+
 ## [0.1.0] - Unreleased
 
 First release. Everything below is new.
