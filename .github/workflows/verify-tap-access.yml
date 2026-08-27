@@ -1,0 +1,30 @@
+# Proves the release workflow can push to the Homebrew tap, without running a release.
+# Run it from the Actions tab, or: gh workflow run verify-tap-access.yml
+name: Verify tap access
+
+on:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    name: clone and push a no-op to the tap
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the deploy key can read and write
+        env:
+          TAP_DEPLOY_KEY: ${{ secrets.TAP_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          KEYDIR="$RUNNER_TEMP/tapkey"; mkdir -p "$KEYDIR"; chmod 700 "$KEYDIR"
+          printf '%s\n' "$TAP_DEPLOY_KEY" > "$KEYDIR/id_ed25519"
+          chmod 600 "$KEYDIR/id_ed25519"
+          ssh-keyscan -t ed25519 github.com > "$KEYDIR/known_hosts" 2>/dev/null
+          export GIT_SSH_COMMAND="ssh -i $KEYDIR/id_ed25519 -o IdentitiesOnly=yes -o UserKnownHostsFile=$KEYDIR/known_hosts"
+
+          TAP="$RUNNER_TEMP/homebrew-tap"
+          git clone --depth 1 git@github.com:31Carlton7/homebrew-tap.git "$TAP"
+          echo "✓ clone (read) works"
+
+          # `--dry-run` asks the server whether the push would be accepted and writes nothing.
+          git -C "$TAP" push --dry-run origin HEAD:master
+          echo "✓ push (write) accepted"

@@ -63,7 +63,7 @@ To check the three of them before a release, from a Mac:
 xcrun notarytool history --apple-id "<email>" --team-id "<TEAMID>" --password "<app-specific>"
 ```
 
-### `TAP_GITHUB_TOKEN`
+### `TAP_DEPLOY_KEY`
 
 A token that can push to the Homebrew tap.
 
@@ -73,7 +73,7 @@ A token that can push to the Homebrew tap.
 2. Create a token that can write to it. Either a fine-grained personal access token scoped to that
    one repository with **Contents: Read and write**, or a classic token with `repo`. Fine-grained
    tokens expire, so put a reminder somewhere for the expiry date.
-3. Save it as `TAP_GITHUB_TOKEN` in **this** repository's Actions secrets.
+3. Save it as `TAP_DEPLOY_KEY` in **this** repository's Actions secrets.
 
 The workflow clones the tap with `x-access-token:$TAP_GITHUB_TOKEN`, copies
 `Homebrew/mcp-manager.rb` from this repo over `Casks/mcp-manager.rb`, rewrites the `version` and
@@ -149,3 +149,18 @@ xcrun notarytool log <submission-id> --apple-id "<email>" --team-id "<TEAMID>" -
 
 The usual causes are a binary inside the bundle that was not signed (check `mcpmd`), a signature
 without a secure timestamp, or hardened runtime missing on one of the two signatures.
+
+## Checking the tap credential
+
+The release pushes the updated cask over SSH with a deploy key (`TAP_DEPLOY_KEY`), which is
+scoped to `31Carlton7/homebrew-tap` alone and does not expire. To confirm it still works without
+cutting a release:
+
+```
+gh workflow run verify-tap-access.yml
+```
+
+It clones the tap and asks the server whether a push would be accepted, writing nothing. To
+rotate the key: `ssh-keygen -t ed25519 -N "" -f tapkey`, add `tapkey.pub` under the tap's
+Settings → Deploy keys with "Allow write access", then
+`gh secret set TAP_DEPLOY_KEY < tapkey` on this repository, and delete both local files.

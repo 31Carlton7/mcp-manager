@@ -182,13 +182,20 @@ jobs:
       # the version and checksum of this release written in.
       - name: Update Homebrew cask
         env:
-          TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+          TAP_DEPLOY_KEY: ${{ secrets.TAP_DEPLOY_KEY }}
           VERSION: ${{ steps.version.outputs.version }}
           SHA256: ${{ steps.checksum.outputs.sha256 }}
         run: |
+          # A deploy key rather than a PAT: it can write to this one repository and nothing else,
+          # and it does not expire out from under the release.
+          KEYDIR="$RUNNER_TEMP/tapkey"; mkdir -p "$KEYDIR"; chmod 700 "$KEYDIR"
+          printf '%s\n' "$TAP_DEPLOY_KEY" > "$KEYDIR/id_ed25519"
+          chmod 600 "$KEYDIR/id_ed25519"
+          ssh-keyscan -t ed25519 github.com > "$KEYDIR/known_hosts" 2>/dev/null
+          export GIT_SSH_COMMAND="ssh -i $KEYDIR/id_ed25519 -o IdentitiesOnly=yes -o UserKnownHostsFile=$KEYDIR/known_hosts"
+
           TAP="$RUNNER_TEMP/homebrew-tap"
-          git clone --depth 1 \
-            "https://x-access-token:$TAP_GITHUB_TOKEN@github.com/31Carlton7/homebrew-tap.git" "$TAP"
+          git clone --depth 1 git@github.com:31Carlton7/homebrew-tap.git "$TAP"
 
           mkdir -p "$TAP/Casks"
           cp Homebrew/mcp-manager.rb "$TAP/Casks/mcp-manager.rb"
